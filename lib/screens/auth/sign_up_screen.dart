@@ -32,7 +32,11 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Please check your email to verify your account'),
+            content: Text(
+              'Please check your email for confirmation link before signing in',
+              textAlign: TextAlign.center,
+            ),
+            duration: Duration(seconds: 5),
           ),
         );
         context.go('/signin');

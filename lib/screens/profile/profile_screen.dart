@@ -22,10 +22,9 @@ class ProfileScreen extends ConsumerStatefulWidget {
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   bool _isLoading = false;
-  bool _isEditing = false;  // Add this to track edit mode
+  bool _isEditing = false;
   final _formKey = GlobalKey<FormState>();
   
-  // Controllers for editable fields
   final _displayNameController = TextEditingController();
   final _bioController = TextEditingController();
   final _emailController = TextEditingController();
@@ -34,11 +33,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   final List<String> _skills = [];
   final _newSkillController = TextEditingController();
 
-  // Add these variables
   String? _photoUrl;
   final _imagePicker = ImagePicker();
 
-  // Add this variable with the other state variables
   UserRole _userRole = UserRole.employee;
 
   @override
@@ -205,16 +202,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
-  // Add method to handle photo upload
-  Future<void> _uploadPhoto() async {
+  Future<void> _uploadProfilePhoto() async {
     try {
-      final XFile? image = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 300,
-        maxHeight: 300,
-        imageQuality: 90,
-      );
-
+      final image = await _imagePicker.pickImage(source: ImageSource.gallery);
       if (image == null) return;
 
       setState(() => _isLoading = true);
@@ -222,35 +212,25 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
 
-      // Upload to Supabase Storage
-      final fileName = '${userId}_${DateTime.now().millisecondsSinceEpoch}${path.extension(image.path)}';
+      // Upload to Storage
+      final fileName = '${userId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final file = File(image.path);
-      
-      final response = await supabase
-          .storage
+      final response = await supabase.storage
           .from('profile_photos')
           .upload(fileName, file);
 
-      // Get the public URL
-      final photoUrl = supabase
-          .storage
+      // Get public URL
+      final photoUrl = supabase.storage
           .from('profile_photos')
           .getPublicUrl(fileName);
 
-      // Update profile with new photo URL
-      await supabase.from('profiles').upsert({
-        'id': userId,
+      // Update profile
+      await supabase.from('profiles').update({
         'photo_url': photoUrl,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      }).eq('id', userId);
 
       setState(() => _photoUrl = photoUrl);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Profile photo updated')),
-        );
-      }
+      
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -262,7 +242,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
-  // Add method to toggle edit mode
   void _toggleEditMode() {
     setState(() {
       _isEditing = !_isEditing;
@@ -273,7 +252,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     });
   }
 
-  // Add this widget to build the role selector
   Widget _buildRoleSelector(ThemeData theme) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -363,7 +341,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  // Add this method
   Future<void> _showSignOutDialog() async {
     return showDialog(
       context: context,
@@ -399,12 +376,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         title: const Text('Profile'),
         automaticallyImplyLeading: false,
         actions: [
-          // Edit/Cancel button in AppBar
           IconButton(
             icon: Icon(_isEditing ? Icons.close : Icons.edit),
             onPressed: _toggleEditMode,
           ),
-          // Add this IconButton
           if (!_isEditing)
             IconButton(
               icon: const Icon(Icons.logout),
@@ -420,7 +395,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 physics: const AlwaysScrollableScrollPhysics(),
                 child: Column(
                   children: [
-                    // Profile Header Section
                     Container(
                       width: double.infinity,
                       decoration: BoxDecoration(
@@ -448,7 +422,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                   bottom: -10,
                                   child: IconButton(
                                     icon: const Icon(Icons.camera_alt),
-                                    onPressed: _uploadPhoto,
+                                    onPressed: _uploadProfilePhoto,
                                   ),
                                 ),
                             ],
@@ -465,7 +439,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       ),
                     ),
                     
-                    // Profile Content
                     Padding(
                       padding: const EdgeInsets.all(16),
                       child: _isEditing 
@@ -479,7 +452,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  // Add method to build the view-only profile
   Widget _buildProfileView(ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -612,7 +584,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  // Add this method to handle URL launching
   Future<void> _launchUrl(String url) async {
     try {
       await launchUrl(Uri.parse(url));
@@ -625,14 +596,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
-  // Rename the existing form build method
   Widget _buildEditForm(ThemeData theme) {
     return Form(
       key: _formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Section Title - Basic Info
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
@@ -644,7 +613,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ),
           ),
           
-          // Name Field
           TextFormField(
             controller: _displayNameController,
             decoration: const InputDecoration(
@@ -656,7 +624,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 16),
           
-          // Bio Field
           TextFormField(
             controller: _bioController,
             decoration: const InputDecoration(
@@ -670,7 +637,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             textInputAction: TextInputAction.newline,
           ),
           
-          // Section Title - Contact
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
@@ -682,7 +648,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ),
           ),
           
-          // Contact Fields
           TextFormField(
             controller: _emailController,
             decoration: const InputDecoration(
@@ -713,7 +678,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             keyboardType: TextInputType.url,
           ),
           
-          // Section Title - Skills
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
@@ -725,7 +689,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ),
           ),
           
-          // Skills Section
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -794,7 +757,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           
           const SizedBox(height: 24),
           
-          // Save Button
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(

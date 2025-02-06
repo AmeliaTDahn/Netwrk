@@ -17,6 +17,11 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   bool _isPlaying = false;
   bool _isInitialized = false;
   String? _error;
+  bool _isShowingControls = false;
+
+  // Track both current position and buffered position
+  Duration _currentPosition = Duration.zero;
+  Duration _duration = Duration.zero;
 
   @override
   void initState() {
@@ -32,11 +37,22 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       );
 
       await _controller.initialize();
+      _duration = _controller.value.duration;
+      
+      // Simplified listener that updates both position and playing state
+      _controller.addListener(() {
+        if (mounted) {
+          setState(() {
+            _currentPosition = _controller.value.position;
+            _isPlaying = _controller.value.isPlaying;
+          });
+        }
+      });
+      
       setState(() {
         _isInitialized = true;
       });
 
-      // Auto-play when ready
       _controller.play();
       setState(() {
         _isPlaying = true;
@@ -49,8 +65,29 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     }
   }
 
+  Future<void> _seekTo(Duration position) async {
+    await _controller.seekTo(position);
+    setState(() {
+      _currentPosition = position;
+    });
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$twoDigitMinutes:$twoDigitSeconds";
+  }
+
   @override
   void dispose() {
+    _controller.removeListener(() {
+      if (!mounted) return;
+      setState(() {
+        _currentPosition = _controller.value.position;
+        _isPlaying = _controller.value.isPlaying;
+      });
+    });
     _controller.dispose();
     super.dispose();
   }
@@ -166,6 +203,75 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     // TODO: Update save in Supabase
   }
 
+  Widget _buildVideoControls() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: GestureDetector(
+        // Prevent taps on controls from triggering video tap
+        onTap: () {},
+        child: Container(
+          padding: const EdgeInsets.only(bottom: 40),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              colors: [
+                Colors.black.withOpacity(0.7),
+                Colors.transparent,
+              ],
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Video Progress Bar
+              SliderTheme(
+                data: SliderThemeData(
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                  trackHeight: 4,
+                  activeTrackColor: Colors.white,
+                  inactiveTrackColor: Colors.white.withOpacity(0.3),
+                  thumbColor: Colors.white,
+                  overlayColor: Colors.white.withOpacity(0.3),
+                ),
+                child: Slider(
+                  value: _currentPosition.inMilliseconds.toDouble(),
+                  min: 0,
+                  max: _duration.inMilliseconds.toDouble(),
+                  onChanged: (value) {
+                    if (_duration.inMilliseconds > 0) {
+                      _seekTo(Duration(milliseconds: value.toInt()));
+                    }
+                  },
+                ),
+              ),
+              // Time indicators
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _formatDuration(_currentPosition),
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    Text(
+                      _formatDuration(_duration),
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
@@ -189,29 +295,43 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
     }
 
     return GestureDetector(
-      onTap: _togglePlay,
+      onTap: () {
+        setState(() {
+          _isShowingControls = !_isShowingControls;
+          _togglePlay();
+        });
+      },
       child: Stack(
         fit: StackFit.expand,
         children: [
           Container(
             color: Colors.black,
-            child: FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: _controller.value.size.width,
-                height: _controller.value.size.height,
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: _controller.value.aspectRatio,
                 child: VideoPlayer(_controller),
               ),
             ),
           ),
+          if (_isShowingControls) 
+            Stack(
+              children: [
+                Container(color: Colors.black12),
+                _buildVideoControls(),
+              ],
+            ),
           if (!_isPlaying)
-            Container(
-              color: Colors.black26,
-              child: const Center(
-                child: Icon(
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black38,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
                   Icons.play_arrow,
                   color: Colors.white,
-                  size: 80,
+                  size: 50,
                 ),
               ),
             ),

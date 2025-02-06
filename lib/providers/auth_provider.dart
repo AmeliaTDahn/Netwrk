@@ -31,22 +31,20 @@ class AuthNotifier extends StateNotifier<User?> {
         email: email,
         password: password,
         data: {'username': username},
+        emailRedirectTo: 'io.supabase.netwrk://login-callback/',
       );
 
       if (response.user == null) {
         throw Exception('Sign up failed - no user returned');
       }
 
-      // Create initial profile
-      await _supabase.from('profiles').insert({
-        'id': response.user!.id,
-        'username': username,
-        'contact_email': email,
-        'created_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      // Only create profile if email confirmation is not required or email is already confirmed
+      if (response.user!.emailConfirmedAt != null) {
+        await _createProfile(response.user!.id, username, email);
+      }
 
     } catch (error) {
+      print('Sign up error: $error');
       if (error is PostgrestException) {
         throw Exception('Database error: ${error.message}');
       } else if (error is AuthException) {
@@ -57,17 +55,69 @@ class AuthNotifier extends StateNotifier<User?> {
     }
   }
 
+  // Separate method for creating profile
+  Future<void> _createProfile(String userId, String username, String email) async {
+    final profile = {
+      'id': userId,
+      'username': username,
+      'display_name': username,
+      'contact_email': email,
+      'role': 'employee',
+      'skills': '',
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+
+    try {
+      await _supabase
+          .from('profiles')
+          .insert(profile)
+          .select()
+          .single();
+    } catch (e) {
+      print('Error creating profile: $e');
+      throw Exception('Failed to create profile: $e');
+    }
+  }
+
   Future<void> signIn({
     required String email,
     required String password,
   }) async {
     try {
-      await _supabase.auth.signInWithPassword(
+      final response = await _supabase.auth.signInWithPassword(
         email: email,
         password: password,
       );
+
+      if (response.user == null) {
+        throw Exception('Sign in failed - no user returned');
+      }
+
+      // Check if email is confirmed
+      if (response.user!.emailConfirmedAt == null) {
+        throw Exception('Please confirm your email before signing in');
+      }
+
+      // Create profile if it doesn't exist
+      try {
+        await _supabase
+            .from('profiles')
+            .select()
+            .eq('id', response.user!.id)
+            .single();
+      } catch (e) {
+        await _createProfile(response.user!.id, email.split('@')[0], email);
+      }
+
     } catch (error) {
-      throw Exception('Failed to sign in: $error');
+      if (error is PostgrestException) {
+        throw Exception('Database error: ${error.message}');
+      } else if (error is AuthException) {
+        throw Exception('Auth error: ${error.message}');
+      } else {
+        throw Exception(error.toString());
+      }
     }
   }
 
