@@ -50,8 +50,6 @@
 			<array>
 				<string>io.supabase.netwrk</string>
 			</array>
-			<key>CFBundleURLName</key>
-			<string>login-callback</string>
 		</dict>
 	</array>
 	<key>NSAppTransportSecurity</key>

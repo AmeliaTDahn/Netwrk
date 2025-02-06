@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart' hide Provider;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/supabase_config.dart';
@@ -31,16 +33,27 @@ class AuthNotifier extends StateNotifier<User?> {
         data: {'username': username},
       );
 
-      if (response.user != null) {
-        await _supabase.from('users').insert({
-          'id': response.user!.id,
-          'email': email,
-          'username': username,
-          'created_at': DateTime.now().toIso8601String(),
-        });
+      if (response.user == null) {
+        throw Exception('Sign up failed - no user returned');
       }
+
+      // Create initial profile
+      await _supabase.from('profiles').insert({
+        'id': response.user!.id,
+        'username': username,
+        'contact_email': email,
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+
     } catch (error) {
-      throw Exception('Failed to sign up: $error');
+      if (error is PostgrestException) {
+        throw Exception('Database error: ${error.message}');
+      } else if (error is AuthException) {
+        throw Exception('Auth error: ${error.message}');
+      } else {
+        throw Exception('Unexpected error during sign up: $error');
+      }
     }
   }
 

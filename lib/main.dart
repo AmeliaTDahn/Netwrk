@@ -8,18 +8,28 @@ import 'core/supabase_config.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Load .env file
-  await dotenv.load(fileName: ".env");
+  // Load .env file and verify
+  await dotenv.load();
+  
+  // Debug print to verify .env loading
+  print('SUPABASE_URL: ${dotenv.env['SUPABASE_URL']}');
+  print('SUPABASE_ANON_KEY length: ${dotenv.env['SUPABASE_ANON_KEY']?.length}');
   
   // Validate Supabase configuration
   validateConfig();
   
   // Initialize Supabase
-  await Supabase.initialize(
-    url: supabaseUrl,
-    anonKey: supabaseAnonKey,
-    debug: true,
-  );
+  try {
+    await Supabase.initialize(
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey,
+      debug: true,
+      authFlowType: AuthFlowType.pkce,
+    );
+    print('Supabase initialized successfully');
+  } catch (e) {
+    print('Error initializing Supabase: $e');
+  }
 
   runApp(const ProviderScope(child: NetwrkApp()));
 }

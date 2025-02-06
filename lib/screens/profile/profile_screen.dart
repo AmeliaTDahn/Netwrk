@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/supabase_client.dart';
+import '../../core/supabase_config.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
@@ -60,20 +60,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           .eq('id', userId)
           .single();
 
-      _photoUrl = data['photo_url'];
-      _displayNameController.text = data['display_name'] ?? '';
-      _bioController.text = data['bio'] ?? '';
-      _emailController.text = data['contact_email'] ?? '';
-      _phoneController.text = data['phone'] ?? '';
-      _resumeUrlController.text = data['resume_url'] ?? '';
-      _userRole = data['role'] == 'business' ? UserRole.business : UserRole.employee;
-      
-      // Handle skills as a list
-      final skillsString = data['skills'] as String?;
-      if (skillsString != null) {
+      setState(() {
+        _photoUrl = data['photo_url'];
+        _displayNameController.text = data['display_name'] ?? '';
+        _bioController.text = data['bio'] ?? '';
+        _emailController.text = data['contact_email'] ?? '';
+        _phoneController.text = data['phone'] ?? '';
+        _resumeUrlController.text = data['resume_url'] ?? '';
+        _userRole = data['role'] == 'business' ? UserRole.business : UserRole.employee;
+        
+        // Handle skills
+        final skillsString = data['skills'] as String?;
         _skills.clear();
-        _skills.addAll(skillsString.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty));
-      }
+        if (skillsString != null && skillsString.isNotEmpty) {
+          _skills.addAll(skillsString.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty));
+        }
+      });
       
     } catch (e) {
       if (mounted) {
@@ -93,24 +95,24 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     
     try {
       final userId = supabase.auth.currentUser?.id;
-      if (userId == null) return;
+      if (userId == null) throw Exception('Must be logged in to update profile');
 
-      await supabase.from('profiles').upsert({
-        'id': userId,
-        'display_name': _displayNameController.text,
-        'bio': _bioController.text,
-        'contact_email': _emailController.text,
-        'phone': _phoneController.text,
-        'resume_url': _resumeUrlController.text,
+      await supabase.from('profiles').update({
+        'display_name': _displayNameController.text.trim(),
+        'bio': _bioController.text.trim(),
+        'contact_email': _emailController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'resume_url': _resumeUrlController.text.trim(),
         'skills': _skills.join(','),
         'role': _userRole.name,
         'updated_at': DateTime.now().toIso8601String(),
-      });
+      }).eq('id', userId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profile updated successfully')),
         );
+        setState(() => _isEditing = false);
       }
     } catch (e) {
       if (mounted) {
@@ -403,10 +405,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             onPressed: _toggleEditMode,
           ),
           // Add this IconButton
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _showSignOutDialog,
-          ),
+          if (!_isEditing)
+            IconButton(
+              icon: const Icon(Icons.logout),
+              onPressed: _showSignOutDialog,
+            ),
         ],
       ),
       backgroundColor: theme.colorScheme.background,

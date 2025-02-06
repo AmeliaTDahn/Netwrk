@@ -42,7 +42,7 @@ class _MainScreenState extends State<MainScreen> {
     
     switch (index) {
       case 0:
-        context.go('/feed');
+        context.go('/');
         break;
       case 1:
         context.go('/create');
