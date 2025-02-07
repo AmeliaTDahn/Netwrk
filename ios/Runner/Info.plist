@@ -31,6 +31,8 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
@@ -43,27 +45,5 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>io.supabase.netwrk</string>
-			</array>
-		</dict>
-	</array>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>We need camera access to let you take profile photos</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Netwrk needs microphone access to record audio in your videos</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>We need photo library access to let you choose profile photos</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Netwrk needs photo library access to save your recorded videos</string>
 </dict>
-</plist> 
+</plist>

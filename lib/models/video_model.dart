@@ -110,4 +110,51 @@ final List<Video> employeeVideos = [
     createdAt: DateTime.now(),
     category: VideoCategory.employee,
   ),
-]; 
+];
+
+class VideoModel {
+  final String id;
+  final String url;
+  final String title;
+  final String userId;
+  final String thumbnailUrl;
+  final String description;
+  final String username;
+  final String displayName;
+  final String? photoUrl;
+  final String category;
+  final DateTime createdAt;
+  final Map<String, dynamic> profiles;
+
+  VideoModel({
+    required this.id,
+    required this.url,
+    required this.title,
+    required this.userId,
+    required this.thumbnailUrl,
+    required this.description,
+    required this.username,
+    required this.displayName,
+    this.photoUrl,
+    required this.category,
+    required this.createdAt,
+    required this.profiles,
+  });
+
+  factory VideoModel.fromJson(Map<String, dynamic> json) {
+    return VideoModel(
+      id: json['id'],
+      url: json['url'],
+      title: json['title'] ?? '',
+      userId: json['user_id'],
+      thumbnailUrl: json['thumbnail_url'],
+      description: json['description'] ?? '',
+      username: json['profiles']['username'],
+      displayName: json['profiles']['display_name'],
+      photoUrl: json['profiles']['photo_url'],
+      category: json['category'] ?? '',
+      createdAt: DateTime.parse(json['created_at']),
+      profiles: json['profiles'] ?? {},
+    );
+  }
+} 

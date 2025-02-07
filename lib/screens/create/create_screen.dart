@@ -5,19 +5,35 @@ import 'package:video_thumbnail/video_thumbnail.dart' as video_thumbnail;
 import '../../core/supabase_client.dart';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-class CreateScreen extends StatefulWidget {
+class CreateScreen extends ConsumerStatefulWidget {
   const CreateScreen({super.key});
 
   @override
-  State<CreateScreen> createState() => _CreateScreenState();
+  ConsumerState<CreateScreen> createState() => _CreateScreenState();
 }
 
-class _CreateScreenState extends State<CreateScreen> {
+class _CreateScreenState extends ConsumerState<CreateScreen> {
   final ImagePicker _picker = ImagePicker();
   bool _isProcessing = false;
   String? _videoPath;
   final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _titleController = TextEditingController();
+  double _compressionProgress = 0.0;
+  Subscription? _compressionSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // Subscribe to compression progress
+    _compressionSubscription = VideoCompress.compressProgress$.subscribe((progress) {
+      setState(() {
+        _compressionProgress = progress;
+      });
+    });
+  }
 
   Future<void> _recordVideo() async {
     try {
@@ -74,17 +90,60 @@ class _CreateScreenState extends State<CreateScreen> {
 
   Future<void> _processAndUploadVideo() async {
     if (_videoPath == null) return;
+    if (_titleController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a title')),
+      );
+      return;
+    }
 
+    if (!mounted) return;
     setState(() {
       _isProcessing = true;
+      _compressionProgress = 0.0;
     });
 
+    File? videoFile;
+    File? thumbnailFile;
+    File? originalVideoFile;
+
     try {
+      // Show compression progress dialog
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => WillPopScope(
+            onWillPop: () async => false,
+            child: AlertDialog(
+              title: const Text('Processing Video'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text('Compressing: ${(_compressionProgress * 100).toStringAsFixed(0)}%'),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      originalVideoFile = File(_videoPath!);
+      
       // Compress video
       final MediaInfo? compressedVideo = await VideoCompress.compressVideo(
         _videoPath!,
         quality: VideoQuality.MediumQuality,
+        deleteOrigin: false, // Keep original video
+        includeAudio: true,
       );
+
+      // Close progress dialog
+      if (mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
 
       if (compressedVideo == null || compressedVideo.file == null) {
         throw 'Video compression failed';
@@ -92,21 +151,20 @@ class _CreateScreenState extends State<CreateScreen> {
 
       // Generate thumbnail
       final thumbnailPath = await video_thumbnail.VideoThumbnail.thumbnailFile(
-        video: _videoPath!,
+        video: compressedVideo.file!.path,
         imageFormat: video_thumbnail.ImageFormat.JPEG,
         quality: 75,
       );
 
       if (thumbnailPath == null) throw 'Thumbnail generation failed';
 
-      final videoFile = File(compressedVideo.file!.path);
-      final thumbnailFile = File(thumbnailPath);
+      videoFile = File(compressedVideo.file!.path);
+      thumbnailFile = File(thumbnailPath);
 
       // Upload to Supabase
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) throw 'User not authenticated';
 
-      // Get user's role
       final userData = await supabase
           .from('profiles')
           .select('role')
@@ -114,49 +172,99 @@ class _CreateScreenState extends State<CreateScreen> {
           .single();
       
       final userRole = userData['role'] as String;
+      if (!['business', 'employee'].contains(userRole)) {
+        throw 'Invalid user role';
+      }
 
-      // Upload video
-      final videoFileName = 'videos/${userId}_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      // Upload video with proper path structure
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final videoFileName = '$userId/$timestamp.mp4';
       await supabase.storage
           .from('videos')
           .upload(videoFileName, videoFile);
 
       // Upload thumbnail
-      final thumbnailFileName = 'thumbnails/${userId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final thumbnailFileName = '$userId/$timestamp.jpg';
       await supabase.storage
           .from('thumbnails')
           .upload(thumbnailFileName, thumbnailFile);
 
       // Get public URLs
-      final videoUrl = supabase.storage.from('videos').getPublicUrl(videoFileName);
-      final thumbnailUrl = supabase.storage.from('thumbnails').getPublicUrl(thumbnailFileName);
+      final videoUrl = supabase.storage
+          .from('videos')
+          .getPublicUrl(videoFileName);
+      final thumbnailUrl = supabase.storage
+          .from('thumbnails')
+          .getPublicUrl(thumbnailFileName);
 
-      // Create video post
+      // Create video post with current timestamp
+      final now = DateTime.now().toUtc();
       await supabase.from('videos').insert({
         'user_id': userId,
+        'title': _titleController.text.trim(),
         'url': videoUrl,
         'thumbnail_url': thumbnailUrl,
-        'description': _descriptionController.text,
+        'description': _descriptionController.text.trim(),
         'category': userRole,
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': now.toIso8601String(),
+        'updated_at': now.toIso8601String(),
+      });
+
+      // Clear the form
+      _titleController.clear();
+      _descriptionController.clear();
+      setState(() {
+        _videoPath = null;
       });
 
       if (mounted) {
-        Navigator.pop(context);
+        Navigator.pop(context); // Close post creation dialog
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Video uploaded successfully')),
+          const SnackBar(content: Text('Video posted successfully!')),
         );
+        
+        // Navigate back to home page
+        context.go('/');
       }
     } catch (e) {
+      print('Error uploading video: $e');
+      String errorMessage = 'Error uploading video';
+      
+      if (e.toString().contains('Invalid user role')) {
+        errorMessage = 'Invalid user role. Please update your profile.';
+      } else if (e.toString().contains('not-null constraint')) {
+        errorMessage = 'Please fill in all required fields';
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error uploading video: $e')),
+          SnackBar(content: Text(errorMessage)),
         );
       }
     } finally {
-      setState(() {
-        _isProcessing = false;
-      });
+      // Clean up files safely
+      try {
+        await VideoCompress.deleteAllCache();
+        
+        if (originalVideoFile?.existsSync() == true) {
+          await originalVideoFile!.delete();
+        }
+        if (videoFile?.existsSync() == true) {
+          await videoFile!.delete();
+        }
+        if (thumbnailFile?.existsSync() == true) {
+          await thumbnailFile!.delete();
+        }
+      } catch (e) {
+        print('Error cleaning up files: $e');
+      }
+
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _compressionProgress = 0.0;
+        });
+      }
     }
   }
 
@@ -173,6 +281,14 @@ class _CreateScreenState extends State<CreateScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              TextField(
+                controller: _titleController,
+                decoration: const InputDecoration(
+                  labelText: 'Title',
+                  hintText: 'Enter a title for your video...',
+                ),
+              ),
+              const SizedBox(height: 16),
               TextField(
                 controller: _descriptionController,
                 decoration: const InputDecoration(
@@ -254,6 +370,9 @@ class _CreateScreenState extends State<CreateScreen> {
 
   @override
   void dispose() {
+    _titleController.dispose();
+    _compressionSubscription?.unsubscribe();
+    VideoCompress.cancelCompression();
     _descriptionController.dispose();
     super.dispose();
   }

@@ -6,12 +6,16 @@ import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:url_launcher/url_launcher.dart';
+import '../saves/saves_screen.dart';
 
 // Add this enum at the top of the file
 enum UserRole {
   business,
   employee,
 }
+
+// Add this at the top of the file
+const Color primaryBlue = Color(0xFF2196F3);    // Light blue
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -374,7 +378,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profile'),
-        automaticallyImplyLeading: false,
+        leading: ModalRoute.of(context)?.canPop == true 
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
         actions: [
           IconButton(
             icon: Icon(_isEditing ? Icons.close : Icons.edit),
@@ -496,33 +505,40 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         )),
         
         const SizedBox(height: 24),
-        _buildSectionTitle('Skills', theme),
-        _buildInfoCard(
-          _skills.isEmpty
-              ? const Text(
-                  'No skills added yet',
+        if (_skills.isNotEmpty) ...[
+          _buildSectionTitle('Skills', theme),
+          _buildInfoCard(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _skills.map((skill) => Chip(
+                label: Text(
+                  skill,
                   style: TextStyle(
-                    color: Colors.grey,
-                    fontSize: 16,
+                    color: theme.colorScheme.primary,
                   ),
-                )
-              : Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: _skills.map((skill) => Chip(
-                    label: Text(
-                      skill,
-                      style: TextStyle(
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                    backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
-                  )).toList(),
                 ),
+                backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
+              )).toList(),
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
+
+        _buildSectionTitle('Saved Content', theme),
+        _buildInfoCard(
+          ListTile(
+            leading: const Icon(Icons.bookmark),
+            title: const Text('Saved Videos'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SavesScreen()),
+              );
+            },
+          ),
         ),
-        const SizedBox(height: 24),
-        _buildSectionTitle('Account Type', theme),
-        _buildRoleSelector(theme),
       ],
     );
   }

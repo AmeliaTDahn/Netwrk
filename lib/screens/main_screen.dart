@@ -4,40 +4,43 @@ import './feed/feed_screen.dart';
 import './create/create_screen.dart';
 import './profile/profile_screen.dart';
 import './messages/messages_screen.dart';
-import './explore/explore_screen.dart';
+import './connect/connect_screen.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-class MainScreen extends StatefulWidget {
+class MainScreen extends ConsumerStatefulWidget {
   final int initialIndex;
-  
+  final int? initialConnectTab;
+
   const MainScreen({
     super.key,
     this.initialIndex = 0,
+    this.initialConnectTab,
   });
 
   @override
-  State<MainScreen> createState() => _MainScreenState();
+  ConsumerState<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
-  late int _currentIndex;
+class _MainScreenState extends ConsumerState<MainScreen> {
+  late int _selectedIndex;
+
+  List<Widget> get _screens => [
+    const FeedScreen(),
+    const CreateScreen(),
+    ConnectScreen(initialTab: widget.initialConnectTab),
+    const MessagesScreen(),
+    const ProfileScreen(),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _currentIndex = widget.initialIndex;
+    _selectedIndex = widget.initialIndex;
   }
-
-  final List<Widget> _screens = const [
-    FeedScreen(),
-    CreateScreen(),
-    ExploreScreen(),
-    MessagesScreen(),
-    ProfileScreen(),
-  ];
 
   void _onItemTapped(int index) {
     setState(() {
-      _currentIndex = index;
+      _selectedIndex = index;
     });
     
     switch (index) {
@@ -48,7 +51,7 @@ class _MainScreenState extends State<MainScreen> {
         context.go('/create');
         break;
       case 2:
-        context.go('/explore');
+        context.go('/connect');
         break;
       case 3:
         context.go('/messages');
@@ -62,7 +65,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: _screens[_selectedIndex],
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           border: Border(
@@ -73,7 +76,7 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
         child: BottomNavigationBar(
-          currentIndex: _currentIndex,
+          currentIndex: _selectedIndex,
           onTap: _onItemTapped,
           backgroundColor: Colors.white,
           selectedItemColor: Theme.of(context).colorScheme.primary,
@@ -95,7 +98,7 @@ class _MainScreenState extends State<MainScreen> {
             BottomNavigationBarItem(
               icon: Icon(Icons.people_outline),
               activeIcon: Icon(Icons.people),
-              label: 'Explore',
+              label: 'Connect',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.chat_outlined),

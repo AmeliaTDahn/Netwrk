@@ -5,9 +5,13 @@ import '../screens/main_screen.dart';
 import '../screens/auth/sign_in_screen.dart';
 import '../screens/auth/sign_up_screen.dart';
 import '../screens/profile/profile_screen.dart';
-import '../screens/explore/explore_screen.dart';
+import '../screens/connect/connect_screen.dart';
 import '../screens/messages/messages_screen.dart';
 import '../screens/create/create_screen.dart';
+import '../screens/profile/user_profile_screen.dart';
+import '../screens/profile/business_profile_screen.dart';
+import '../screens/connect/connection_requests_screen.dart';
+import '../screens/messages/chat_screen.dart';
 import '../providers/auth_provider.dart';
 
 class NoTransitionPage<T> extends CustomTransitionPage<T> {
@@ -57,10 +61,21 @@ class NetwrkApp extends ConsumerWidget {
           ),
         ),
         GoRoute(
-          path: '/explore',
+          path: '/connect',
           pageBuilder: (context, state) => NoTransitionPage(
             child: const MainScreen(initialIndex: 2),
           ),
+          routes: [
+            GoRoute(
+              path: 'discover',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: const MainScreen(
+                  initialIndex: 2,
+                  initialConnectTab: 0, // 0 for discover tab
+                ),
+              ),
+            ),
+          ],
         ),
         GoRoute(
           path: '/messages',
@@ -72,6 +87,28 @@ class NetwrkApp extends ConsumerWidget {
           path: '/create',
           pageBuilder: (context, state) => NoTransitionPage(
             child: const MainScreen(initialIndex: 1),
+          ),
+        ),
+        GoRoute(
+          path: '/profile/:id',
+          builder: (context, state) => UserProfileScreen(
+            userId: state.pathParameters['id']!,
+          ),
+        ),
+        GoRoute(
+          path: '/business-profile/:id',
+          builder: (context, state) => BusinessProfileScreen(
+            userId: state.pathParameters['id']!,
+          ),
+        ),
+        GoRoute(
+          path: '/connection-requests',
+          builder: (context, state) => const ConnectionRequestsScreen(),
+        ),
+        GoRoute(
+          path: '/messages/:chatId',
+          builder: (context, state) => ChatScreen(
+            chatId: state.pathParameters['chatId']!,
           ),
         ),
       ],
