@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../screens/main_screen.dart';
 import '../screens/auth/sign_in_screen.dart';
 import '../screens/auth/sign_up_screen.dart';
+import '../screens/auth/onboarding_screen.dart';
 import '../screens/profile/profile_screen.dart';
 import '../screens/connect/connect_screen.dart';
 import '../screens/messages/messages_screen.dart';
@@ -12,7 +13,12 @@ import '../screens/profile/user_profile_screen.dart';
 import '../screens/profile/business_profile_screen.dart';
 import '../screens/connect/connection_requests_screen.dart';
 import '../screens/messages/chat_screen.dart';
+import '../screens/listings/listings_screen.dart';
+import '../screens/listings/job_listings_browse_screen.dart';
+import '../screens/listings/submit_application_screen.dart';
 import '../providers/auth_provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../screens/notifications/notifications_screen.dart';
 
 class NoTransitionPage<T> extends CustomTransitionPage<T> {
   NoTransitionPage({
@@ -49,28 +55,34 @@ class NetwrkApp extends ConsumerWidget {
           ),
         ),
         GoRoute(
+          path: '/onboarding',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: const OnboardingScreen(),
+          ),
+        ),
+        GoRoute(
           path: '/',
           pageBuilder: (context, state) => NoTransitionPage(
-            child: const MainScreen(initialIndex: 0),
+            child: const MainScreen(initialIndex: 1),
           ),
         ),
         GoRoute(
           path: '/profile',
           pageBuilder: (context, state) => NoTransitionPage(
-            child: const MainScreen(initialIndex: 4),
+            child: const MainScreen(initialIndex: 3),
           ),
         ),
         GoRoute(
           path: '/connect',
           pageBuilder: (context, state) => NoTransitionPage(
-            child: const MainScreen(initialIndex: 2),
+            child: const MainScreen(initialIndex: 1),
           ),
           routes: [
             GoRoute(
               path: 'discover',
               pageBuilder: (context, state) => NoTransitionPage(
                 child: const MainScreen(
-                  initialIndex: 2,
+                  initialIndex: 1,
                   initialConnectTab: 0, // 0 for discover tab
                 ),
               ),
@@ -80,13 +92,13 @@ class NetwrkApp extends ConsumerWidget {
         GoRoute(
           path: '/messages',
           pageBuilder: (context, state) => NoTransitionPage(
-            child: const MainScreen(initialIndex: 3),
+            child: const MainScreen(initialIndex: 2),
           ),
         ),
         GoRoute(
           path: '/create',
           pageBuilder: (context, state) => NoTransitionPage(
-            child: const MainScreen(initialIndex: 1),
+            child: const MainScreen(initialIndex: 0),
           ),
         ),
         GoRoute(
@@ -111,20 +123,89 @@ class NetwrkApp extends ConsumerWidget {
             chatId: state.pathParameters['chatId']!,
           ),
         ),
+        GoRoute(
+          path: '/listings',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: const MainScreen(initialIndex: 1),
+          ),
+        ),
+        GoRoute(
+          path: '/browse-jobs',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: const MainScreen(initialIndex: 2),
+          ),
+        ),
+        GoRoute(
+          path: '/submit-application/:jobId',
+          builder: (context, state) => SubmitApplicationScreen(
+            jobListingId: state.pathParameters['jobId']!,
+            jobTitle: state.uri.queryParameters['title'] ?? '',
+            businessName: state.uri.queryParameters['business'] ?? '',
+          ),
+        ),
+        GoRoute(
+          path: '/employee',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: const MainScreen(initialIndex: 2),
+          ),
+        ),
+        GoRoute(
+          path: '/notifications',
+          pageBuilder: (context, state) => NoTransitionPage(
+            child: const NotificationsScreen(),
+          ),
+        ),
       ],
-      redirect: (BuildContext context, GoRouterState state) {
+      redirect: (BuildContext context, GoRouterState state) async {
         final isAuth = authState != null;
         final isGoingToAuth = state.matchedLocation == '/signin' || 
                             state.matchedLocation == '/signup';
+        final isGoingToOnboarding = state.matchedLocation == '/onboarding';
 
         // If not authenticated and not going to auth page, redirect to signin
         if (!isAuth && !isGoingToAuth) {
           return '/signin';
         }
 
-        // If authenticated and going to auth page, redirect to home
+        // If authenticated and going to auth page, redirect to home or onboarding
         if (isAuth && isGoingToAuth) {
-          return '/';
+          // Check if profile is complete
+          try {
+            final profile = await Supabase.instance.client
+                .from('profiles')
+                .select('account_type')
+                .eq('id', authState.id)
+                .single();
+            
+            // If profile doesn't have an account type, redirect to onboarding
+            if (profile == null || profile['account_type'] == null) {
+              return '/onboarding';
+            }
+            
+            return '/';
+          } catch (e) {
+            // If no profile exists, redirect to onboarding
+            return '/onboarding';
+          }
+        }
+
+        // If authenticated but no profile, redirect to onboarding
+        if (isAuth && !isGoingToOnboarding) {
+          try {
+            final profile = await Supabase.instance.client
+                .from('profiles')
+                .select('account_type')
+                .eq('id', authState.id)
+                .single();
+            
+            // If profile doesn't have an account type, redirect to onboarding
+            if (profile == null || profile['account_type'] == null) {
+              return '/onboarding';
+            }
+          } catch (e) {
+            // If no profile exists, redirect to onboarding
+            return '/onboarding';
+          }
         }
 
         return null;

@@ -5,7 +5,11 @@ import './create/create_screen.dart';
 import './profile/profile_screen.dart';
 import './messages/messages_screen.dart';
 import './connect/connect_screen.dart';
+import './employee/employee_screen.dart';
+import './listings/business_listings_screen.dart';
+import './listings/job_listings_browse_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/supabase_config.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
   final int initialIndex;
@@ -23,19 +27,52 @@ class MainScreen extends ConsumerStatefulWidget {
 
 class _MainScreenState extends ConsumerState<MainScreen> {
   late int _selectedIndex;
-
-  List<Widget> get _screens => [
-    const FeedScreen(),
-    const CreateScreen(),
-    ConnectScreen(initialTab: widget.initialConnectTab),
-    const MessagesScreen(),
-    const ProfileScreen(),
-  ];
+  String? _accountType;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
     _selectedIndex = widget.initialIndex;
+    _loadAccountType();
+  }
+
+  Future<void> _loadAccountType() async {
+    try {
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return;
+
+      final data = await supabase
+          .from('profiles')
+          .select('account_type')
+          .eq('id', userId)
+          .single();
+
+      setState(() {
+        _accountType = data['account_type'];
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  List<Widget> get _screens {
+    if (_accountType == 'business') {
+      return [
+        ConnectScreen(initialTab: widget.initialConnectTab),
+        const BusinessListingsScreen(),
+        const MessagesScreen(),
+        const ProfileScreen(),
+      ];
+    }
+    return [
+      const CreateScreen(),
+      ConnectScreen(initialTab: widget.initialConnectTab),
+      const JobListingsBrowseScreen(),
+      const MessagesScreen(),
+      const ProfileScreen(),
+    ];
   }
 
   void _onItemTapped(int index) {
@@ -43,75 +80,148 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       _selectedIndex = index;
     });
     
-    switch (index) {
-      case 0:
-        context.go('/');
-        break;
-      case 1:
-        context.go('/create');
-        break;
-      case 2:
-        context.go('/connect');
-        break;
-      case 3:
-        context.go('/messages');
-        break;
-      case 4:
-        context.go('/profile');
-        break;
+    if (_accountType == 'business') {
+      switch (index) {
+        case 0:
+          context.go('/connect');
+          break;
+        case 1:
+          context.go('/listings');
+          break;
+        case 2:
+          context.go('/messages');
+          break;
+        case 3:
+          context.go('/profile');
+          break;
+      }
+    } else {
+      switch (index) {
+        case 0:
+          context.go('/create');
+          break;
+        case 1:
+          context.go('/connect');
+          break;
+        case 2:
+          context.go('/browse-jobs');
+          break;
+        case 3:
+          context.go('/messages');
+          break;
+        case 4:
+          context.go('/profile');
+          break;
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    Widget body;
+    if (_accountType == 'business') {
+      switch (_selectedIndex) {
+        case 0:
+          body = const ConnectScreen();
+          break;
+        case 1:
+          body = const BusinessListingsScreen();
+          break;
+        case 2:
+          body = const MessagesScreen();
+          break;
+        case 3:
+          body = const ProfileScreen();
+          break;
+        default:
+          body = const SizedBox.shrink();
+      }
+    } else {
+      switch (_selectedIndex) {
+        case 0:
+          body = const CreateScreen();
+          break;
+        case 1:
+          body = const ConnectScreen();
+          break;
+        case 2:
+          body = const JobListingsBrowseScreen();
+          break;
+        case 3:
+          body = const MessagesScreen();
+          break;
+        case 4:
+          body = const ProfileScreen();
+          break;
+        default:
+          body = const SizedBox.shrink();
+      }
+    }
+
     return Scaffold(
-      body: _screens[_selectedIndex],
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(
-              color: Colors.grey.withOpacity(0.2),
-              width: 1,
-            ),
-          ),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: _selectedIndex,
-          onTap: _onItemTapped,
-          backgroundColor: Colors.white,
-          selectedItemColor: Theme.of(context).colorScheme.primary,
-          unselectedItemColor: Colors.grey[600],
-          selectedFontSize: 12,
-          unselectedFontSize: 12,
-          type: BottomNavigationBarType.fixed,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home_outlined),
-              activeIcon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.add_circle_outline),
-              activeIcon: Icon(Icons.add_circle),
-              label: 'Create',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.people_outline),
-              activeIcon: Icon(Icons.people),
-              label: 'Connect',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.chat_outlined),
-              activeIcon: Icon(Icons.chat),
-              label: 'Messages',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.person_outline),
-              activeIcon: Icon(Icons.person),
-              label: 'Profile',
-            ),
-          ],
-        ),
+      body: body,
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        type: BottomNavigationBarType.fixed,
+        items: _accountType == 'business' 
+          ? [
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.people_outline),
+                activeIcon: Icon(Icons.people),
+                label: 'Connect',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.work_outline),
+                activeIcon: Icon(Icons.work),
+                label: 'Listings',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.chat_outlined),
+                activeIcon: Icon(Icons.chat),
+                label: 'Messages',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.person_outline),
+                activeIcon: Icon(Icons.person),
+                label: 'Profile',
+              ),
+            ]
+          : [
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.add_circle_outline),
+                activeIcon: Icon(Icons.add_circle),
+                label: 'Create',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.people_outline),
+                activeIcon: Icon(Icons.people),
+                label: 'Connect',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.work_outline),
+                activeIcon: Icon(Icons.work),
+                label: 'Listings',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.chat_outlined),
+                activeIcon: Icon(Icons.chat),
+                label: 'Messages',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.person_outline),
+                activeIcon: Icon(Icons.person),
+                label: 'Profile',
+              ),
+            ],
       ),
     );
   }
