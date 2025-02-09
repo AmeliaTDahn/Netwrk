@@ -59,7 +59,6 @@ class VideoInteractionOverlay extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
                 color: Colors.white.withOpacity(0.2),
@@ -80,13 +79,6 @@ class VideoInteractionOverlay extends StatelessWidget {
             color: Colors.white,
             fontSize: 13,
             fontWeight: FontWeight.w500,
-            shadows: [
-              Shadow(
-                color: Colors.black45,
-                offset: Offset(0, 1),
-                blurRadius: 2,
-              ),
-            ],
           ),
         ),
       ],

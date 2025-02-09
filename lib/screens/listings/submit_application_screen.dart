@@ -228,20 +228,28 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
       }
 
       // Upload video
-      final videoFileName = '${DateTime.now().toIso8601String()}_${userId}_video.mp4';
+      final videoFileName = '${userId}/${DateTime.now().toIso8601String()}_video.mp4';
       await supabase.storage.from('applications').upload(
         videoFileName,
         _videoFile!,
+        fileOptions: const FileOptions(
+          cacheControl: '3600',
+          upsert: false,
+        ),
       );
       final videoUrl = supabase.storage.from('applications').getPublicUrl(videoFileName);
 
       // Upload resume if provided
       String? resumeUrl;
       if (_resumeFile != null) {
-        final resumeFileName = '${DateTime.now().toIso8601String()}_${userId}_resume.pdf';
+        final resumeFileName = '${userId}/${DateTime.now().toIso8601String()}_resume.pdf';
         await supabase.storage.from('applications').upload(
           resumeFileName,
           _resumeFile!,
+          fileOptions: const FileOptions(
+            cacheControl: '3600',
+            upsert: false,
+          ),
         );
         resumeUrl = supabase.storage.from('applications').getPublicUrl(resumeFileName);
       }

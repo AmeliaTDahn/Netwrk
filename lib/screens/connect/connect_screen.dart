@@ -4,6 +4,7 @@ import '../../core/supabase_config.dart';
 import 'dart:async';
 import 'package:go_router/go_router.dart';
 import '../messages/chat_screen.dart';
+import '../../components/banner_notification.dart';
 
 const Color primaryBlue = Color(0xFF2196F3);    // Light blue
 const Color secondaryBlue = Color(0xFF1565C0);  // Dark blue
@@ -464,11 +465,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
           .maybeSingle();
 
       if (existingConnection != null) {
-        // If active connection exists, show error
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Connection request already exists')),
-          );
+          BannerNotification.show(context, 'Connection request already exists');
         }
         return;
       }
@@ -497,16 +495,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
       });
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Connection request sent!')),
-        );
+        BannerNotification.show(context, 'Connection request sent!');
       }
     } catch (e) {
       print('Error sending request: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error sending request: $e')),
-        );
+        BannerNotification.show(context, 'Error sending request: $e');
       }
     }
   }
@@ -538,16 +532,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
           _discoveredUsers.add(otherUserProfile);
         });
         
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Connection request cancelled')),
-        );
+        BannerNotification.show(context, 'Connection request cancelled');
       }
     } catch (e) {
       print('Error cancelling request: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error cancelling request: $e')),
-        );
+        BannerNotification.show(context, 'Error cancelling request: $e');
       }
     }
   }
@@ -557,81 +547,125 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_connectedUsers.isEmpty) {
-      return Center(
-        child: Text(
-          'No connections yet',
-          style: TextStyle(
-            color: Colors.grey[600],
-            fontSize: 16,
-          ),
-        ),
-      );
-    }
-
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _connectedUsers.length,
       itemBuilder: (context, index) {
         final connection = _connectedUsers[index];
-        final user = _getOtherUserProfile(connection);
+        final currentUserId = supabase.auth.currentUser?.id;
+        final user = connection['requester_id'] == currentUserId
+            ? connection['profiles']
+            : connection['requester_profile'];
+
         return _buildUserCard(
           user,
-          actionButton: TextButton.icon(
-            onPressed: () => _openOrCreateChat(user['id']),
-            icon: const Icon(Icons.chat),
-            label: const Text('Chat'),
-            style: TextButton.styleFrom(
-              foregroundColor: primaryBlue,
-            ),
+          actionButton: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton.icon(
+                onPressed: () => _showDisconnectDialog(connection['id']),
+                icon: const Icon(Icons.person_remove, color: Colors.red),
+                label: const Text('Disconnect', style: TextStyle(color: Colors.red)),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _openChat(user['id']),
+                icon: const Icon(Icons.chat, color: Colors.blue),
+                label: const Text('Chat', style: TextStyle(color: Colors.blue)),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                ),
+              ),
+            ],
           ),
         );
       },
     );
   }
 
-  Future<void> _openOrCreateChat(String otherUserId) async {
+  Future<void> _showDisconnectDialog(String connectionId) async {
+    final shouldDisconnect = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Disconnect'),
+        content: const Text('Are you sure you want to disconnect? This will remove your connection and chat history.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.red,
+            ),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDisconnect == true) {
+      await _disconnectUser(connectionId);
+    }
+  }
+
+  Future<void> _disconnectUser(String connectionId) async {
     try {
-      setState(() => _isLoading = true);
+      // Find the connection before deleting it
+      final connection = _connectedUsers.firstWhere(
+        (conn) => conn['id'] == connectionId,
+      );
+      
+      // Get the other user's profile data
+      final currentUserId = supabase.auth.currentUser?.id;
+      final otherUserProfile = connection['requester_id'] == currentUserId
+          ? connection['profiles']
+          : connection['requester_profile'];
+      
+      // Delete the connection
+      await supabase
+          .from('connections')
+          .delete()
+          .match({'id': connectionId});
+
+      if (mounted) {
+        setState(() {
+          // Remove from connected users
+          _connectedUsers.removeWhere((conn) => conn['id'] == connectionId);
+          // Add back to discovered users
+          _discoveredUsers.add(otherUserProfile);
+        });
+        
+        BannerNotification.show(context, 'Connection removed');
+      }
+    } catch (e) {
+      print('Error disconnecting user: $e');
+      if (mounted) {
+        BannerNotification.show(context, 'Error removing connection: $e');
+      }
+    }
+  }
+
+  Future<void> _openChat(String userId) async {
+    try {
       final currentUserId = supabase.auth.currentUser?.id;
       if (currentUserId == null) return;
 
-      // Try to find existing chat
       final response = await supabase
           .from('chats')
           .select('id')
-          .or('and(user1_id.eq.${currentUserId},user2_id.eq.${otherUserId}),and(user1_id.eq.${otherUserId},user2_id.eq.${currentUserId})')
-          .maybeSingle();
-
-      String chatId;
-      if (response != null) {
-        // Existing chat found
-        chatId = response['id'];
-      } else {
-        // Create new chat
-        final newChat = await supabase
-            .from('chats')
-            .insert({
-              'user1_id': currentUserId,
-              'user2_id': otherUserId,
-            })
-            .select()
-            .single();
-        chatId = newChat['id'];
-      }
+          .or('and(user1_id.eq.${currentUserId},user2_id.eq.${userId}),and(user1_id.eq.${userId},user2_id.eq.${currentUserId})')
+          .single();
 
       if (mounted) {
-        context.push('/messages/$chatId');
+        context.push('/messages/${response['id']}');
       }
     } catch (e) {
+      print('Error opening chat: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error opening chat: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
+        BannerNotification.show(context, 'Error opening chat: $e');
       }
     }
   }
@@ -644,7 +678,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: ListTile(
         leading: GestureDetector(
-          onTap: () => _navigateToProfile(user['id'], user['role']),
+          onTap: () => _navigateToProfile(user['id'], user['account_type']),
           child: CircleAvatar(
             backgroundImage: user['photo_url'] != null
                 ? NetworkImage(user['photo_url'])
@@ -655,7 +689,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
           ),
         ),
         title: GestureDetector(
-          onTap: () => _navigateToProfile(user['id'], user['role']),
+          onTap: () => _navigateToProfile(user['id'], user['account_type']),
           child: Text(
             user['display_name'] ?? user['username'] ?? 'User',
             style: const TextStyle(
@@ -663,7 +697,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
             ),
           ),
         ),
-        subtitle: Text(user['role'] ?? ''),
+        subtitle: Text(
+          user['account_type'] == 'business' ? 'Business' : 'Employee'
+        ),
         trailing: actionButton,
       ),
     );
@@ -678,8 +714,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
     }
   }
 
-  void _navigateToProfile(String userId, String role) {
-    if (role == 'business') {
+  void _navigateToProfile(String userId, String? accountType) {
+    if (accountType == 'business') {
       context.push('/business-profile/$userId');
     } else {
       context.push('/profile/$userId');

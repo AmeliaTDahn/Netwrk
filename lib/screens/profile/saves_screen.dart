@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/supabase_config.dart';
 import '../feed/video_player_screen.dart';
@@ -89,70 +90,111 @@ class _SavesScreenState extends ConsumerState<SavesScreen> {
     }
 
     if (_savedVideos.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Saved Videos')),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.bookmark_border, size: 64, color: Colors.grey),
-              const SizedBox(height: 16),
-              const Text(
-                'No saved videos yet',
-                style: TextStyle(fontSize: 18, color: Colors.grey),
-              ),
-            ],
+      return Theme(
+        data: ThemeData.light().copyWith(
+          appBarTheme: const AppBarTheme(
+            systemOverlayStyle: SystemUiOverlayStyle.dark,
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            elevation: 0,
+            iconTheme: IconThemeData(color: Colors.black),
+            titleTextStyle: TextStyle(
+              color: Colors.black,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('Saved Videos'),
+          ),
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.bookmark_border, size: 64, color: Colors.grey),
+                const SizedBox(height: 16),
+                const Text(
+                  'No saved videos yet',
+                  style: TextStyle(fontSize: 18, color: Colors.grey),
+                ),
+              ],
+            ),
           ),
         ),
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Saved Videos')),
-      body: GridView.builder(
-        padding: const EdgeInsets.all(8),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
-          childAspectRatio: 0.5,
+    return Theme(
+      data: ThemeData.light().copyWith(
+        appBarTheme: const AppBarTheme(
+          systemOverlayStyle: SystemUiOverlayStyle.dark,
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.black,
+          elevation: 0,
+          iconTheme: IconThemeData(color: Colors.black),
+          titleTextStyle: TextStyle(
+            color: Colors.black,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
-        itemCount: _savedVideos.length,
-        itemBuilder: (context, index) {
-          final video = _savedVideos[index]['videos'];
-          return GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => VideoPlayerScreen(
-                    videoUrl: video['url'],
-                    username: video['profiles']['username'],
-                    description: video['description'],
+      ),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Saved Videos'),
+        ),
+        body: GridView.builder(
+          padding: const EdgeInsets.all(8),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            childAspectRatio: 0.5,
+          ),
+          itemCount: _savedVideos.length,
+          itemBuilder: (context, index) {
+            final video = _savedVideos[index]['videos'];
+            return GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => VideoPlayerScreen(
+                      videoId: video['id'],
+                      videoUrl: video['url'],
+                      username: video['profiles']['username'],
+                      description: video['description'],
+                      thumbnailUrl: video['thumbnail_url'],
+                      displayName: video['profiles']['display_name'] ?? video['profiles']['username'],
+                      photoUrl: video['profiles']['photo_url'],
+                      userId: video['profiles']['id'],
+                    ),
                   ),
-                ),
-              );
-            },
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.network(
-                  video['thumbnail_url'],
-                  fit: BoxFit.cover,
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton(
-                    icon: const Icon(Icons.bookmark_remove),
-                    color: Colors.white,
-                    onPressed: () => _unsaveVideo(video['id']),
+                );
+              },
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    video['thumbnail_url'],
+                    fit: BoxFit.cover,
                   ),
-                ),
-              ],
-            ),
-          );
-        },
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: IconButton(
+                      icon: const Icon(Icons.bookmark_remove),
+                      color: Colors.white,
+                      onPressed: () => _unsaveVideo(video['id']),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

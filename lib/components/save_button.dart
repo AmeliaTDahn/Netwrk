@@ -2,12 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/supabase_config.dart';
 
+const Color primaryBlue = Color(0xFF2196F3);    // Light blue
+
 class SaveButton extends ConsumerStatefulWidget {
   final String videoId;
+  final String? applicationId;  // Optional application ID for folder view
+  final String? currentStatus;  // Optional current status for folder view
 
   const SaveButton({
     super.key,
     required this.videoId,
+    this.applicationId,
+    this.currentStatus,
   });
 
   @override
@@ -29,17 +35,34 @@ class _SaveButtonState extends ConsumerState<SaveButton> {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
 
-      final response = await supabase
-          .from('saves')
-          .select()
-          .eq('user_id', userId)
-          .eq('video_id', widget.videoId)
-          .maybeSingle();
+      if (widget.applicationId != null) {
+        // For folder view, check application status
+        final response = await supabase
+            .from('job_applications')
+            .select('status')
+            .eq('id', widget.applicationId)
+            .single();
+        
+        if (mounted) {
+          setState(() {
+            _isSaved = response['status'] == 'saved' || 
+                      response['status'] == 'interviewing_saved';
+          });
+        }
+      } else {
+        // For regular video saves
+        final response = await supabase
+            .from('saves')
+            .select()
+            .eq('user_id', userId)
+            .eq('video_id', widget.videoId)
+            .maybeSingle();
 
-      if (mounted) {
-        setState(() {
-          _isSaved = response != null;
-        });
+        if (mounted) {
+          setState(() {
+            _isSaved = response != null;
+          });
+        }
       }
     } catch (e) {
       print('Error checking save status: $e');
@@ -54,21 +77,37 @@ class _SaveButtonState extends ConsumerState<SaveButton> {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
 
-      if (_isSaved) {
-        // Remove save
+      if (widget.applicationId != null) {
+        // For folder view, update application status
+        final currentStatus = widget.currentStatus ?? 'pending';
+        String newStatus;
+        
+        if (currentStatus == 'interviewing') {
+          newStatus = _isSaved ? 'interviewing' : 'interviewing_saved';
+        } else {
+          newStatus = _isSaved ? 'pending' : 'saved';
+        }
+
         await supabase
-            .from('saves')
-            .delete()
-            .eq('user_id', userId)
-            .eq('video_id', widget.videoId);
+            .from('job_applications')
+            .update({'status': newStatus})
+            .eq('id', widget.applicationId);
       } else {
-        // Add save
-        await supabase
-            .from('saves')
-            .insert({
-              'user_id': userId,
-              'video_id': widget.videoId,
-            });
+        // For regular video saves
+        if (_isSaved) {
+          await supabase
+              .from('saves')
+              .delete()
+              .eq('user_id', userId)
+              .eq('video_id', widget.videoId);
+        } else {
+          await supabase
+              .from('saves')
+              .insert({
+                'user_id': userId,
+                'video_id': widget.videoId,
+              });
+        }
       }
 
       if (mounted) {
@@ -97,14 +136,20 @@ class _SaveButtonState extends ConsumerState<SaveButton> {
               height: 24,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
               ),
             )
           : Icon(
-              _isSaved ? Icons.bookmark : Icons.bookmark_border,
-              color: Colors.white,
+              _isSaved ? Icons.bookmark : Icons.bookmark_outline,
+              color: _isSaved ? primaryBlue : Colors.black,
+              size: 28,
             ),
       onPressed: _toggleSave,
+      style: IconButton.styleFrom(
+        padding: const EdgeInsets.all(8),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+      ),
     );
   }
 } 

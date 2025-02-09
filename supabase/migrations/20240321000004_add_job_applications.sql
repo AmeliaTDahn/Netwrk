@@ -1,28 +1,37 @@
--- Drop existing policies if they exist
+-- Drop ALL existing storage policies first
+drop policy if exists "Anyone can view application files" on storage.objects;
+drop policy if exists "Authenticated users can upload application files" on storage.objects;
+drop policy if exists "Applicants can access their own application files" on storage.objects;
+drop policy if exists "Businesses can access application files for their listings" on storage.objects;
+drop policy if exists "Users can upload avatar images" on storage.objects;
+drop policy if exists "Avatar images are publicly accessible" on storage.objects;
+drop policy if exists "Users can update their own avatar images" on storage.objects;
+drop policy if exists "temp_allow_all" on storage.objects;
+
+-- Drop all existing policies first
 drop policy if exists "Users can view their own applications" on public.job_applications;
 drop policy if exists "Users can create applications" on public.job_applications;
 drop policy if exists "Businesses can view applications for their listings" on public.job_applications;
 drop policy if exists "Businesses can update application status" on public.job_applications;
 
--- Drop existing table if it exists
-drop table if exists public.job_applications;
+-- Drop all notification policies
+drop policy if exists "Users can view their own notifications" on public.notifications;
+drop policy if exists "System can create notifications" on public.notifications;
+drop policy if exists "Users can update their own notifications" on public.notifications;
+
+-- Drop existing table if it exists with CASCADE to handle dependencies
+drop table if exists public.job_applications cascade;
 
 -- Create applications storage bucket if it doesn't exist
 insert into storage.buckets (id, name, public)
-values ('applications', 'applications', true)
+values ('applications', 'applications', false)
 on conflict (id) do nothing;
 
--- Storage policies for applications bucket
-create policy "Anyone can view application files"
-    on storage.objects for select
-    using ( bucket_id = 'applications' );
-
-create policy "Authenticated users can upload application files"
-    on storage.objects for insert
-    with check (
-        bucket_id = 'applications'
-        and auth.role() = 'authenticated'
-    );
+-- Create a temporary permissive policy
+create policy "temp_allow_all"
+    on storage.objects for all
+    using ( bucket_id = 'applications' )
+    with check ( bucket_id = 'applications' );
 
 -- Create job_applications table
 create table public.job_applications (
@@ -32,12 +41,47 @@ create table public.job_applications (
     video_url text not null,
     resume_url text,
     cover_note text,
-    status text check (status in ('pending', 'rejected', 'interviewing', 'accepted', 'saved', 'viewed')) default 'pending',
+    status text check (status in ('pending', 'interviewing', 'accepted', 'rejected', 'saved')),
     viewed_at timestamp with time zone,
+    processed boolean default false,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
     updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
     unique(job_listing_id, applicant_id)
 );
+
+-- Drop temporary policy
+drop policy if exists "temp_allow_all" on storage.objects;
+
+-- Create proper storage policies
+create policy "Applicants can access their own application files"
+    on storage.objects for all
+    using (
+        bucket_id = 'applications'
+        and auth.role() = 'authenticated'
+        and (storage.foldername(name))[1] = auth.uid()::text
+    );
+
+create policy "Businesses can access application files for their listings"
+    on storage.objects for all
+    using (
+        bucket_id = 'applications'
+        and auth.role() = 'authenticated'
+        and exists (
+            select 1
+            from job_applications ja
+            join job_listings jl on jl.id = ja.job_listing_id
+            where storage.foldername(name) = array[ja.applicant_id::text]
+            and jl.business_id = auth.uid()
+        )
+    );
+
+create policy "Authenticated users can upload application files"
+    on storage.objects for insert
+    with check (
+        bucket_id = 'applications'
+        and auth.role() = 'authenticated'
+        and (storage.foldername(name))[1] = auth.uid()::text
+    );
 
 -- Add trigger for updated_at
 create trigger handle_job_applications_updated_at

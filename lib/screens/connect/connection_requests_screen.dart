@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/supabase_config.dart';
+import '../../components/banner_notification.dart';
 
 class ConnectionRequestsScreen extends StatefulWidget {
   const ConnectionRequestsScreen({super.key});
@@ -62,16 +63,12 @@ class _ConnectionRequestsScreenState extends State<ConnectionRequestsScreen> {
       await _loadIncomingRequests();
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Connection request accepted')),
-        );
+        BannerNotification.show(context, 'Connection request accepted');
       }
     } catch (e) {
       print('Error accepting request: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error accepting request: $e')),
-        );
+        BannerNotification.show(context, 'Error accepting request: $e');
       }
     }
   }
@@ -95,16 +92,12 @@ class _ConnectionRequestsScreenState extends State<ConnectionRequestsScreen> {
       });
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Connection request declined')),
-        );
+        BannerNotification.show(context, 'Connection request declined');
       }
     } catch (e) {
       print('Error declining request: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error declining request: $e')),
-        );
+        BannerNotification.show(context, 'Error declining request: $e');
       }
     }
   }

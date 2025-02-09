@@ -20,7 +20,8 @@ alter table public.profiles
   add column if not exists phone text,
   add column if not exists location text,
   add column if not exists bio text,
-  add column if not exists photo_url text;
+  add column if not exists photo_url text,
+  add column if not exists username text;
 
 -- Update RLS policies
 alter table public.profiles enable row level security;
@@ -63,4 +64,33 @@ create policy "Users can update their own avatar images"
     bucket_id = 'avatars'
     and auth.role() = 'authenticated'
     and (storage.foldername(name))[1] = auth.uid()::text
-  ); 
+  );
+
+-- Make username nullable in profiles table
+ALTER TABLE profiles 
+ALTER COLUMN username DROP NOT NULL;
+
+-- Add a trigger to generate a random username if none is provided
+CREATE OR REPLACE FUNCTION generate_random_username()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.username IS NULL THEN
+    -- Generate a random username using the first part of email and random numbers
+    NEW.username := LOWER(
+      SPLIT_PART(NEW.email, '@', 1) || 
+      '_' || 
+      FLOOR(RANDOM() * 100000)::TEXT
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS ensure_username_trigger ON profiles;
+
+-- Create new trigger
+CREATE TRIGGER ensure_username_trigger
+BEFORE INSERT ON profiles
+FOR EACH ROW
+EXECUTE FUNCTION generate_random_username(); 

@@ -90,15 +90,44 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
 
     try {
       if (_isConnected) {
-        // Navigate to chat
-        final response = await supabase
-            .from('chats')
-            .select('id')
-            .or('and(user1_id.eq.${currentUserId},user2_id.eq.${widget.userId}),and(user1_id.eq.${widget.userId},user2_id.eq.${currentUserId})')
-            .single();
+        // Show confirmation dialog before disconnecting
+        final shouldDisconnect = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Disconnect'),
+            content: const Text('Are you sure you want to disconnect? This will remove your connection and chat history.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.red,
+                ),
+                child: const Text('Disconnect'),
+              ),
+            ],
+          ),
+        );
 
-        if (mounted) {
-          context.push('/messages/${response['id']}');
+        if (shouldDisconnect == true) {
+          // Delete the connection
+          await supabase
+              .from('connections')
+              .delete()
+              .or('and(requester_id.eq.${currentUserId},receiver_id.eq.${widget.userId}),and(requester_id.eq.${widget.userId},receiver_id.eq.${currentUserId})');
+
+          if (mounted) {
+            setState(() {
+              _isConnected = false;
+              _isPendingConnection = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Connection removed')),
+            );
+          }
         }
       } else if (!_isPendingConnection) {
         // Send connection request
@@ -299,15 +328,35 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                   ],
 
                   // Skills Section
-                  if (_userProfile!['skills'] != null && _userProfile!['skills'].toString().isNotEmpty) ...[
+                  if (_userProfile!['skills'] != null) ...[
                     _buildSection(
                       title: 'Skills',
                       icon: Icons.psychology_outlined,
-                      child: Text(
-                        _userProfile!['skills'],
-                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          height: 1.5,
-                        ),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: (_userProfile!['skills'].toString()
+                                .replaceAll('[', '')
+                                .replaceAll(']', '')
+                                .split(','))
+                            .where((skill) => skill.trim().isNotEmpty)
+                            .map((skill) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    skill.trim(),
+                                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      color: Theme.of(context).colorScheme.primary,
+                                    ),
+                                  ),
+                                ))
+                            .toList(),
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -412,7 +461,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
         onPressed: _isLoadingConnection ? null : _handleConnect,
         style: ElevatedButton.styleFrom(
           backgroundColor: _isConnected 
-              ? Colors.green 
+              ? Colors.red 
               : _isPendingConnection 
                   ? Colors.orange 
                   : Colors.blue,
@@ -440,7 +489,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(_isConnected 
-                        ? Icons.chat 
+                        ? Icons.person_remove 
                         : _isPendingConnection 
                             ? Icons.pending_outlined 
                             : Icons.person_add,
@@ -448,7 +497,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                     const SizedBox(width: 6),
                     Text(
                       _isConnected 
-                          ? 'Chat' 
+                          ? 'Disconnect' 
                           : _isPendingConnection 
                               ? 'Pending' 
                               : 'Connect',

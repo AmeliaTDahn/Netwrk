@@ -6,19 +6,25 @@ import 'package:timeago/timeago.dart' as timeago;
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'dart:typed_data';
+import 'dart:math';
 import 'package:url_launcher/url_launcher.dart';
 import '../profile/user_profile_screen.dart';
+import '../../components/banner_notification.dart';
+import 'dart:convert';
+import '../feed/video_player_screen.dart';
 
 class ApplicationsScreen extends StatefulWidget {
   final String? jobListingId;
   final String? filterStatus;
   final bool showFolderView;
+  final String? singleApplicationId;
 
   const ApplicationsScreen({
     super.key,
     this.jobListingId,
     this.filterStatus,
     this.showFolderView = true,
+    this.singleApplicationId,
   });
 
   @override
@@ -29,20 +35,43 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
   final PageController _pageController = PageController();
   List<Map<String, dynamic>> _applications = [];
   bool _isLoading = true;
+  Map<String, bool> _tabLoadingStates = {
+    'accepted': true,
+    'interviewing': true,
+    'saved': true,
+  };
+  Map<String, List<Map<String, dynamic>>> _tabApplications = {
+    'accepted': [],
+    'interviewing': [],
+    'saved': [],
+  };
   int _currentIndex = 0;
   Map<String, VideoPlayerController> _videoControllers = {};
   Map<String, Uint8List?> _thumbnails = {};
   VideoPlayerController? _nextVideoController;
-  String _currentView = 'all'; // 'all', 'accepted', 'interviewing', 'saved'
+  String _currentView = 'all'; // 'all', 'accepted', 'interviewing'
+  Map<String, dynamic>? _lastRejectedApplication; // Store last rejected application
+  bool _isRefreshing = false;
+  static const int _preloadAhead = 3; // Number of videos to preload ahead
+  final Map<String, bool> _preloadingVideos = {}; // Track which videos are being preloaded
+  final Set<String> _preloadQueue = {}; // Queue of videos to preload
 
   @override
   void initState() {
     super.initState();
-    _loadApplications();
+    _loadApplications().then((_) {
+      if (_applications.isNotEmpty) {
+        _preloadVideos(0); // Start preloading videos after initial load
+      }
+    });
   }
 
   Future<void> _loadApplications() async {
-    setState(() => _isLoading = true);
+    if (_currentView == 'all') {
+      setState(() => _isLoading = true);
+    } else {
+      setState(() => _tabLoadingStates[_currentView] = true);
+    }
 
     try {
       final userId = supabase.auth.currentUser?.id;
@@ -51,67 +80,83 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
       var query = supabase
           .from('job_applications')
           .select('''
-            id,
-            video_url,
-            status,
-            created_at,
-            viewed_at,
-            job_listing_id,
-            job_listings (
-              id,
-              title,
-              business_id
-            ),
-            profiles (
+            *,
+            profiles!inner (
               id,
               name,
               photo_url,
-              education,
-              experience_years,
-              skills,
-              location
+              skills
             ),
-            resume_url
-          ''')
-          .eq('job_listings.business_id', userId);
+            job_listings!inner (
+              *,
+              interview_message_template,
+              acceptance_message_template,
+              profiles!business_id (*)
+            )
+          ''');
 
       // Add job listing filter if specified
       if (widget.jobListingId != null) {
         query = query.eq('job_listing_id', widget.jobListingId);
       }
 
-      // Add status filter if specified
-      if (widget.filterStatus != null) {
-        query = query.eq('status', widget.filterStatus);
-      } else if (_currentView != 'all') {
-        // Filter by current folder view if not showing all
-        query = query.eq('status', _currentView);
-      }
-
-      // Only show unviewed applications in the main feed
-      if (_currentView == 'all') {
-        query = query.is_('viewed_at', null);
-      }
-
-      // Load all relevant applications for folder view
-      if (_currentView != 'all') {
-        query = query.in_('status', ['saved', 'accepted', 'interviewing']);
+      // Add single application filter if specified
+      if (widget.singleApplicationId != null) {
+        query = query.eq('id', widget.singleApplicationId);
+      } else {
+        // Only apply status filters if not viewing a single application
+        if (widget.filterStatus != null) {
+          query = query.eq('status', widget.filterStatus);
+        } else if (_currentView != 'all') {
+          // For folder views, show applications with specific statuses
+          if (_currentView == 'accepted') {
+            query = query.eq('status', 'accepted');
+          } else if (_currentView == 'interviewing') {
+            query = query.or('status.eq.interviewing,status.eq.interviewing_saved');
+          } else if (_currentView == 'saved') {
+            query = query.or('status.eq.saved,status.eq.interviewing_saved');
+          }
+        } else {
+          // For the main feed, only show unprocessed applications
+          query = query.not('status', 'in', '(accepted,rejected,saved,interviewing,interviewing_saved)');
+        }
       }
 
       final response = await query.order('created_at', ascending: false);
 
       setState(() {
-        _applications = List<Map<String, dynamic>>.from(response);
-        _isLoading = false;
+        if (_currentView == 'all') {
+          _applications = List<Map<String, dynamic>>.from(response);
+          _isLoading = false;
+        } else {
+          _tabApplications[_currentView] = List<Map<String, dynamic>>.from(response);
+          _tabLoadingStates[_currentView] = false;
+        }
       });
 
-      // Initialize first video and preload thumbnails
-      if (_applications.isNotEmpty && _currentView == 'all') {
-        await _initializeVideoController(_applications[0]['video_url']);
-        _preloadNextVideo(1);
-        _loadThumbnails();
+      // Initialize video controllers for visible applications
+      final applicationsToInitialize = _currentView == 'all' ? _applications : _tabApplications[_currentView]!;
+      for (var application in applicationsToInitialize) {
+        final videoUrl = application['video_url'];
+        if (videoUrl != null) {
+          await _initializeVideoController(videoUrl);
+        }
       }
-    } catch (e) {
+
+      // Play the first video if viewing a single application
+      if (widget.singleApplicationId != null && applicationsToInitialize.isNotEmpty) {
+        final videoUrl = applicationsToInitialize[0]['video_url'];
+        if (_videoControllers[videoUrl] != null) {
+          await _videoControllers[videoUrl]!.play();
+        }
+      }
+
+      // Start loading all thumbnails in the background
+      _loadAllThumbnails();
+
+    } catch (e, stackTrace) {
+      print('Error loading applications: $e');
+      print('Stack trace: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -119,113 +164,337 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
             backgroundColor: Colors.red,
           ),
         );
-        setState(() => _isLoading = false);
+        setState(() {
+          if (_currentView == 'all') {
+            _isLoading = false;
+          } else {
+            _tabLoadingStates[_currentView] = false;
+          }
+        });
       }
     }
   }
 
-  Future<void> _loadThumbnails() async {
-    for (var application in _applications) {
-      final videoUrl = application['video_url'];
+  Future<void> _loadAllThumbnails() async {
+    // Collect all unique video URLs across all tabs and main view
+    final allApplications = [
+      ..._applications,
+      ...(_tabApplications['accepted'] ?? []),
+      ...(_tabApplications['interviewing'] ?? []),
+      ...(_tabApplications['saved'] ?? []),
+    ];
+    
+    final uniqueVideoUrls = allApplications
+        .map((app) => app['video_url'])
+        .where((url) => url != null)
+        .toSet();
+    
+    // Load thumbnails in the background
+    for (var videoUrl in uniqueVideoUrls) {
+      if (_thumbnails[videoUrl] != null) continue;  // Skip if already loaded
+      
       try {
+        final storagePath = videoUrl.split('applications/').last;
+        final signedUrl = await supabase.storage
+            .from('applications')
+            .createSignedUrl(storagePath, 3600);
+            
         final thumbnail = await VideoThumbnail.thumbnailData(
-          video: videoUrl,
+          video: signedUrl,
           imageFormat: ImageFormat.JPEG,
-          quality: 25,
+          quality: 50,
+          maxWidth: 300,
         );
+        
         if (mounted) {
           setState(() {
             _thumbnails[videoUrl] = thumbnail;
           });
         }
       } catch (e) {
-        // Silently fail for thumbnails
-        print('Error loading thumbnail: $e');
+        print('Error loading thumbnail for $videoUrl: $e');
       }
     }
   }
 
-  Future<void> _preloadNextVideo(int nextIndex) async {
-    if (nextIndex >= _applications.length) return;
+  Future<void> _preloadVideos(int currentIndex) async {
+    // Calculate range of videos to preload
+    final startIndex = currentIndex + 1;
+    final endIndex = min(startIndex + _preloadAhead, _applications.length);
     
-    final nextVideoUrl = _applications[nextIndex]['video_url'];
-    if (_videoControllers[nextVideoUrl] == null) {
-      try {
-        final controller = VideoPlayerController.network(
-          nextVideoUrl,
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-        );
-        _nextVideoController = controller;
-        await controller.initialize();
-        _videoControllers[nextVideoUrl] = controller;
-      } catch (e) {
-        print('Error preloading next video: $e');
+    for (var i = startIndex; i < endIndex; i++) {
+      final videoUrl = _applications[i]['video_url'];
+      if (videoUrl == null || 
+          _videoControllers[videoUrl] != null || 
+          _preloadingVideos[videoUrl] == true) continue;
+
+      _preloadQueue.add(videoUrl);
+      _preloadingVideos[videoUrl] = true;
+      
+      _preloadVideo(videoUrl);
+    }
+  }
+
+  Future<void> _preloadVideo(String videoUrl) async {
+    try {
+      final storagePath = videoUrl.split('applications/').last;
+      final signedUrl = await supabase.storage
+          .from('applications')
+          .createSignedUrl(storagePath, 3600);
+
+      final controller = VideoPlayerController.network(
+        signedUrl,
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
+
+      await controller.initialize();
+      await controller.setLooping(true);
+      
+      if (!mounted) {
+        controller.dispose();
+        return;
       }
+
+      setState(() {
+        _videoControllers[videoUrl] = controller;
+        _preloadingVideos[videoUrl] = false;
+        _preloadQueue.remove(videoUrl);
+      });
+    } catch (e) {
+      print('Error preloading video: $e');
+      _preloadingVideos[videoUrl] = false;
+      _preloadQueue.remove(videoUrl);
     }
   }
 
   Future<void> _initializeVideoController(String videoUrl) async {
     if (_videoControllers[videoUrl] == null) {
       try {
-        // Check if this was preloaded
-        if (_nextVideoController != null && 
-            _nextVideoController!.dataSource == videoUrl) {
-          _videoControllers[videoUrl] = _nextVideoController!;
-          _nextVideoController = null;
-        } else {
-          final controller = VideoPlayerController.network(
-            videoUrl,
-            videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-          );
+        print('Starting video initialization for: $videoUrl');
+
+        final storagePath = videoUrl.split('applications/').last;
+        final signedUrl = await supabase.storage
+            .from('applications')
+            .createSignedUrl(storagePath, 3600);
+
+        final controller = VideoPlayerController.network(
+          signedUrl,
+          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+        );
+
+        try {
           await controller.initialize();
-          _videoControllers[videoUrl] = controller;
+          await controller.setLooping(true);
+          await controller.setVolume(1.0);
+
+          if (!mounted) {
+            controller.dispose();
+            return;
+          }
+
+          setState(() {
+            _videoControllers[videoUrl] = controller;
+          });
+          
+          // Only play if this is the current video and we're still mounted
+          if (mounted && _applications.isNotEmpty && 
+              _applications[_currentIndex]['video_url'] == videoUrl) {
+            await controller.play();
+          }
+        } catch (initError) {
+          print('Error initializing controller: $initError');
+          controller.dispose();
+          throw initError;
         }
-        await _videoControllers[videoUrl]?.setLooping(true);
-        await _videoControllers[videoUrl]?.play();
-        if (mounted) setState(() {});
       } catch (e) {
         print('Error initializing video: $e');
+        if (mounted) {
+          _showNotification('Error loading video. Tap to retry', isSuccess: false);
+        }
       }
     }
   }
 
+  // Add this helper method for consistent notifications
+  void _showNotification(String message, {bool isSuccess = true}) {
+    if (!mounted) return;
+    BannerNotification.show(context, message);
+  }
+
   Future<void> _updateApplicationStatus(String applicationId, String newStatus) async {
     try {
+      // Get current application status and full application data
+      final currentApp = await supabase
+          .from('job_applications')
+          .select('''
+            *,
+            profiles!inner (*),
+            job_listings!inner (
+              *,
+              interview_message_template,
+              acceptance_message_template,
+              profiles!business_id (*)
+            )
+          ''')
+          .eq('id', applicationId)
+          .single();
+      
+      final currentStatus = currentApp['status'] as String;
+      final businessId = currentApp['job_listings']['profiles']['id'];
+      final applicantId = currentApp['applicant_id'];
+
+      // Special handling for save/unsave in interview state
+      if (currentStatus == 'interviewing' && newStatus == 'saved') {
+        newStatus = 'interviewing_saved';
+      } else if (currentStatus == 'interviewing_saved' && newStatus == 'pending') {
+        newStatus = 'interviewing';  // Unsave but keep in interview state
+      }
+
+      // Update application status first
       await supabase
           .from('job_applications')
           .update({'status': newStatus})
           .eq('id', applicationId);
 
-      // If accepting from saved folder, switch to accepted tab
-      if (mounted && _currentView == 'saved' && newStatus == 'accepted') {
-        setState(() {
-          _currentView = 'accepted';
-        });
+      // If accepting application or moving to interview, create connection if it doesn't exist
+      if (newStatus == 'accepted' || newStatus == 'interviewing' || newStatus == 'interviewing_saved') {
+        try {
+          // Check for existing connection
+          final existingConnection = await supabase
+              .from('connections')
+              .select()
+              .or('and(requester_id.eq.$businessId,receiver_id.eq.$applicantId),and(requester_id.eq.$applicantId,receiver_id.eq.$businessId)')
+              .maybeSingle();
+
+          if (existingConnection == null) {
+            // Create new connection with accepted status
+            await supabase.from('connections').insert({
+              'requester_id': businessId,
+              'receiver_id': applicantId,
+              'status': 'accepted',
+              'created_at': DateTime.now().toIso8601String(),
+            });
+            print('Created new connection between business and applicant');
+          } else if (existingConnection['status'] != 'accepted') {
+            // Update existing connection to accepted status
+            await supabase
+                .from('connections')
+                .update({'status': 'accepted'})
+                .eq('id', existingConnection['id']);
+            print('Updated existing connection to accepted status');
+          }
+        } catch (connectionError) {
+          print('Error handling connection: $connectionError');
+        }
       }
 
-      // Refresh the applications list after status update
-      _loadApplications();
+      // Create chat and send message for accept/interview
+      if (['accepted', 'interviewing'].contains(newStatus)) {
+        try {
+          print('Starting chat/message process for status: $newStatus');
+          
+          // Check for existing chat
+          final existingChat = await supabase
+              .from('chats')
+              .select('id')
+              .or('and(user1_id.eq.$businessId,user2_id.eq.$applicantId),and(user1_id.eq.$applicantId,user2_id.eq.$businessId)')
+              .maybeSingle();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Application ${newStatus.toLowerCase()}',
-              style: const TextStyle(color: Colors.white),
-            ),
-            backgroundColor: newStatus == 'accepted' ? Colors.green : Colors.blue,
-          ),
-        );
+          print('Existing chat check result: $existingChat');
+          
+          String chatId;
+          if (existingChat == null) {
+            print('Creating new chat');
+            // Create new chat
+            final chatResponse = await supabase
+                .from('chats')
+                .insert({
+                  'user1_id': businessId,
+                  'user2_id': applicantId,
+                  'created_at': DateTime.now().toIso8601String(),
+                })
+                .select()
+                .single();
+            
+            chatId = chatResponse['id'];
+            print('New chat created with ID: $chatId');
+          } else {
+            chatId = existingChat['id'];
+            print('Using existing chat with ID: $chatId');
+          }
+
+          // Prepare message template
+          String messageTemplate;
+          if (newStatus == 'accepted') {
+            messageTemplate = currentApp['job_listings']['acceptance_message_template'] ?? 
+                'Congratulations! We are pleased to inform you that we would like to offer you the position. We believe your skills and experience will be a great addition to our team.';
+          } else {
+            messageTemplate = currentApp['job_listings']['interview_message_template'] ?? 
+                'Hi! Thanks for applying. We would like to schedule an interview with you. Please let me know your availability for this week.';
+          }
+
+          print('Sending message with template: $messageTemplate');
+
+          // Send message
+          await supabase.from('messages').insert({
+            'chat_id': chatId,
+            'sender_id': businessId,
+            'content': messageTemplate,
+          });
+
+          print('Message sent successfully');
+
+        } catch (chatError) {
+          print('Error handling chat/message: $chatError');
+          if (mounted) {
+            _showNotification('Status updated but failed to send message: ${chatError.toString()}', isSuccess: false);
+          }
+        }
       }
+
+      // Update local state
+      setState(() {
+        final applicationIndex = _applications.indexWhere((app) => app['id'] == applicationId);
+        if (applicationIndex != -1) {
+          _applications[applicationIndex]['status'] = newStatus;
+        }
+      });
+
+      // Show appropriate notification
+      if (newStatus == 'rejected') {
+        _showNotification('Application rejected');
+      } else if (newStatus == 'accepted') {
+        _showNotification('Application accepted');
+      } else if (newStatus == 'interviewing' || newStatus == 'interviewing_saved') {
+        _showNotification('Interview scheduled');
+      } else if (newStatus == 'saved' || newStatus == 'interviewing_saved') {
+        _showNotification('Application saved');
+      } else if ((currentStatus == 'saved' || currentStatus == 'interviewing_saved') && 
+                 (newStatus == 'pending' || newStatus == 'interviewing')) {
+        _showNotification('Application unsaved');
+      }
+
+      // Refresh the applications list if we're in folder view
+      if (_currentView != 'all') {
+        _loadApplications();
+      }
+
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error updating application status: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      print('Error updating application: $e');
+      _showNotification('Error updating application status: ${e.toString()}', isSuccess: false);
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'accepted':
+        return Colors.green;
+      case 'rejected':
+        return Colors.red;
+      case 'interviewing':
+        return Colors.blue;
+      default:
+        return Colors.grey;
     }
   }
 
@@ -247,13 +516,21 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Accept or Interview?'),
+        title: const Text('Accept Application'),
         content: const Text('Would you like to accept this candidate or schedule an interview?'),
         actions: [
           TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _updateApplicationStatus(applicationId, 'interviewing');
+              // Check if the application is saved before moving to interview
+              final application = _applications.firstWhere((app) => app['id'] == applicationId);
+              final currentStatus = application['status'] as String;
+              final newStatus = currentStatus == 'saved' ? 'interviewing_saved' : 'interviewing';
+              _updateApplicationStatus(applicationId, newStatus);
             },
             child: const Text('Schedule Interview'),
           ),
@@ -263,7 +540,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
               _updateApplicationStatus(applicationId, 'accepted');
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
+              backgroundColor: Theme.of(context).primaryColor,
               foregroundColor: Colors.white,
             ),
             child: const Text('Accept'),
@@ -290,8 +567,8 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
               _updateApplicationStatus(applicationId, 'rejected');
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
+              backgroundColor: Colors.grey[200],
+              foregroundColor: Colors.black87,
             ),
             child: const Text('Reject'),
           ),
@@ -302,117 +579,116 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
 
   Widget _buildVideoPlayer(String videoUrl) {
     final controller = _videoControllers[videoUrl];
-    final thumbnail = _thumbnails[videoUrl];
-
     if (controller == null || !controller.value.isInitialized) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          if (thumbnail != null)
-            Image.memory(
-              thumbnail,
-              fit: BoxFit.cover,
-            )
-          else
-            Container(color: Colors.black),
-          Center(
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
+      return Container(
+        color: Colors.grey[100],
+        child: const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
           ),
-        ],
+        ),
       );
     }
 
-    return GestureDetector(
-      onTap: () {
-        if (controller.value.isPlaying) {
-          controller.pause();
-        } else {
-          controller.play();
-        }
-        setState(() {});
-      },
+    return AspectRatio(
+      aspectRatio: controller.value.aspectRatio,
       child: Stack(
-        fit: StackFit.expand,
         children: [
-          SizedBox.expand(
-            child: FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: controller.value.size.width,
-                height: controller.value.size.height,
-                child: VideoPlayer(controller),
+          VideoPlayer(controller),
+          // Video controls overlay
+          AnimatedOpacity(
+            opacity: controller.value.isPlaying ? 0.0 : 1.0,
+            duration: const Duration(milliseconds: 200),
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  if (controller.value.isPlaying) {
+                    controller.pause();
+                  } else {
+                    controller.play();
+                  }
+                });
+              },
+              child: Container(
+                color: Colors.black.withOpacity(0.3),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow,
+                      size: 32,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-          if (!controller.value.isPlaying)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.5),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.play_arrow,
-                  color: Colors.white,
-                  size: 40,
-                ),
-              ),
-            ),
         ],
       ),
     );
   }
 
-  void _onPageChanged(int index) {
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
+  }
+
+  void _onPageChanged(int index) async {
+    if (!mounted) return;
+    
+    // Pause current video before changing state
+    final currentVideoUrl = _applications[_currentIndex]['video_url'];
+    await _videoControllers[currentVideoUrl]?.pause();
+    
     setState(() => _currentIndex = index);
     
-    // Play current video
-    final currentVideoUrl = _applications[index]['video_url'];
-    _initializeVideoController(currentVideoUrl);
+    // Initialize and play new video
+    final newVideoUrl = _applications[index]['video_url'];
+    if (_videoControllers[newVideoUrl] == null) {
+      await _initializeVideoController(newVideoUrl);
+    } else {
+      await _videoControllers[newVideoUrl]?.seekTo(Duration.zero);
+      await _videoControllers[newVideoUrl]?.play();
+    }
     
     // Mark application as viewed if in 'all' view
     if (_currentView == 'all') {
       _markApplicationAsViewed(_applications[index]['id']);
     }
     
-    // Pause all other videos
-    for (var entry in _videoControllers.entries) {
-      if (entry.key != currentVideoUrl) {
-        entry.value.pause();
-      }
-    }
-    
-    // Preload next video
-    _preloadNextVideo(index + 1);
+    // Start preloading next set of videos
+    _preloadVideos(index);
     
     // Clean up videos that are no longer needed
-    final keepUrls = {
-      currentVideoUrl,
-      if (index > 0) _applications[index - 1]['video_url'],
-      if (index < _applications.length - 1) _applications[index + 1]['video_url'],
-    };
+    final keepIndices = List.generate(
+      _preloadAhead * 2 + 1,
+      (i) => index - _preloadAhead + i,
+    ).where((i) => i >= 0 && i < _applications.length);
     
-    _videoControllers.removeWhere((url, controller) {
-      if (!keepUrls.contains(url)) {
-        controller.dispose();
-        return true;
-      }
-      return false;
-    });
+    final keepUrls = keepIndices
+        .map((i) => _applications[i]['video_url'])
+        .where((url) => url != null)
+        .toSet();
+    
+    // Dispose controllers that are out of range
+    final urlsToDispose = _videoControllers.keys
+        .where((url) => !keepUrls.contains(url) && !_preloadQueue.contains(url))
+        .toList();
+    
+    for (var url in urlsToDispose) {
+      await _videoControllers[url]?.dispose();
+      _videoControllers.remove(url);
+    }
 
     // Check if we've reached the end of the feed
     if (index == _applications.length - 1) {
-      // Show a snackbar with the notification
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -429,50 +705,41 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
               textColor: Colors.white,
               onPressed: () {
                 setState(() {
-                  _currentView = 'saved';
+                  _currentView = 'accepted';
                   _loadApplications();
                 });
               },
             ),
           ),
         );
-
-        // After a short delay, automatically switch to the applications view
-        Future.delayed(const Duration(seconds: 4), () {
-          if (mounted) {
-            setState(() {
-              _currentView = 'saved';
-              _loadApplications();
-            });
-          }
-        });
       }
     }
   }
 
   Widget _buildApplicationInfo(Map<String, dynamic> application) {
     final profile = application['profiles'] as Map<String, dynamic>;
-    final isSaved = application['status'] == 'saved' || 
-                    application['status'].toString().startsWith('saved_');
+    final isSaved = application['status'] == 'accepted' || 
+                    application['status'].toString().startsWith('accepted_');
     final hasResume = application['resume_url'] != null;
+    final skills = profile['skills'] as List?;
     
     return Stack(
       children: [
-        // Right side buttons
+        // Right side buttons (Save, Profile, Resume)
         Positioned(
           right: 8,
-          bottom: 100,
+          bottom: 140,
           child: Column(
             children: [
               _buildActionButton(
-                icon: isSaved ? Icons.bookmark : Icons.bookmark_border,
-                label: isSaved ? 'Unsave' : 'Save',
+                icon: application['status'] == 'saved' ? Icons.bookmark : Icons.bookmark_border,
+                label: application['status'] == 'saved' ? 'Unsave' : 'Save',
                 onTap: () => _updateApplicationStatus(
                   application['id'],
-                  isSaved ? 'unsave' : 'saved'
+                  application['status'] == 'saved' ? 'pending' : 'saved'
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               _buildActionButton(
                 icon: Icons.person,
                 label: 'Profile',
@@ -488,7 +755,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                 },
               ),
               if (hasResume) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 _buildActionButton(
                   icon: Icons.description,
                   label: 'Resume',
@@ -498,14 +765,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                       try {
                         await launchUrl(Uri.parse(url));
                       } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Could not open resume'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
+                        _showNotification('Could not open resume', isSuccess: false);
                       }
                     }
                   },
@@ -519,35 +779,38 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
         Positioned(
           left: 0,
           right: 0,
-          bottom: 0,
+          bottom: 80,
           child: Container(
-            padding: const EdgeInsets.fromLTRB(16, 50, 16, 16),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.bottomCenter,
                 end: Alignment.topCenter,
                 colors: [
-                  Colors.black.withOpacity(0.8),
+                  Colors.black.withOpacity(0.7),
+                  Colors.black.withOpacity(0.3),
                   Colors.transparent,
                 ],
+                stops: const [0.0, 0.7, 1.0],
               ),
             ),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
                     CircleAvatar(
-                      radius: 20,
+                      radius: 14,
                       backgroundColor: Colors.grey[800],
                       backgroundImage: profile['photo_url'] != null
                           ? NetworkImage(profile['photo_url'])
                           : null,
                       child: profile['photo_url'] == null
-                          ? const Icon(Icons.person, color: Colors.white70)
+                          ? const Icon(Icons.person, color: Colors.white70, size: 16)
                           : null,
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -556,16 +819,15 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                             profile['name'] ?? 'Anonymous',
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 16,
+                              fontSize: 13,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          const SizedBox(height: 2),
                           Text(
                             '${profile['experience_years'] ?? 0} years experience',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
-                              fontSize: 14,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
                             ),
                           ),
                         ],
@@ -573,28 +835,27 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                     ),
                   ],
                 ),
-                if (profile['skills'] != null && profile['skills'] is List) ...[
-                  const SizedBox(height: 12),
+                if (skills != null && skills.isNotEmpty) ...[
+                  const SizedBox(height: 2),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: (profile['skills'] as List)
-                        .map((skill) => skill.toString())
+                    spacing: 4,
+                    runSpacing: 2,
+                    children: skills
                         .take(3)
                         .map((skill) => Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
+                                horizontal: 6,
+                                vertical: 1,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(16),
+                                color: Colors.white24,
+                                borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
-                                skill,
+                                skill.toString(),
                                 style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 12,
+                                  fontSize: 9,
                                 ),
                               ),
                             ))
@@ -606,25 +867,60 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
           ),
         ),
 
-        // Swipe instruction text
+        // Centered Accept/Reject buttons at bottom
         Positioned(
-          top: MediaQuery.of(context).padding.top + 60,
           left: 0,
           right: 0,
-          child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                'Swipe ← to reject, → to accept/interview',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
+          bottom: 0,
+          child: Container(
+            height: 80,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Center(
+              child: SizedBox(
+                width: 240,
+                child: _currentView == 'accepted'
+                    ? Container()
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: ElevatedButton(
+                                onPressed: () => _showRejectDialog(application['id']),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.grey[200],
+                                  foregroundColor: Colors.black87,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(30),
+                                  ),
+                                ),
+                                child: const Text('Reject'),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: ElevatedButton(
+                                onPressed: () => _showAcceptDialog(application['id']),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(context).primaryColor,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(30),
+                                  ),
+                                ),
+                                child: const Text('Accept'),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
               ),
             ),
           ),
@@ -638,36 +934,53 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
     required String label,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.5),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: Colors.white, size: 24),
+    final bool isSaved = label == 'Unsave';
+    
+    return Column(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: isSaved ? Colors.blue : Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
+          child: IconButton(
+            icon: Icon(icon),
+            onPressed: onTap,
+            color: isSaved ? Colors.white : Colors.black87,
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: isSaved ? FontWeight.bold : FontWeight.normal,
+            shadows: const [
+              Shadow(
+                color: Colors.black,
+                blurRadius: 8,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildFolderView() {
     return DefaultTabController(
       length: 3,
+      initialIndex: _currentView == 'accepted' ? 0 : _currentView == 'interviewing' ? 1 : 2,
       child: Column(
         children: [
           Container(
@@ -682,9 +995,9 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
             ),
             child: TabBar(
               tabs: const [
-                Tab(text: 'Saved'),
                 Tab(text: 'Accepted'),
                 Tab(text: 'Interviews'),
+                Tab(text: 'Saved'),
               ],
               labelColor: Colors.black,
               unselectedLabelColor: Colors.grey,
@@ -702,26 +1015,28 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                 setState(() {
                   switch (index) {
                     case 0:
-                      _currentView = 'saved';
-                      break;
-                    case 1:
                       _currentView = 'accepted';
                       break;
-                    case 2:
+                    case 1:
                       _currentView = 'interviewing';
                       break;
+                    case 2:
+                      _currentView = 'saved';
+                      break;
                   }
-                  _loadApplications();
                 });
+                // Just load applications, thumbnails will be loaded in the background
+                _loadApplications();
               },
             ),
           ),
           Expanded(
             child: TabBarView(
+              physics: const ClampingScrollPhysics(),
               children: [
-                _buildApplicationsList('saved'),
                 _buildApplicationsList('accepted'),
                 _buildApplicationsList('interviewing'),
+                _buildApplicationsList('saved'),
               ],
             ),
           ),
@@ -731,24 +1046,37 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
   }
 
   Widget _buildApplicationsList(String status) {
-    final filteredApplications = _applications.where((app) {
-      final appStatus = app['status'] as String;
-      if (status == 'saved') {
-        return appStatus == 'saved' || appStatus.startsWith('saved_');
-      } else if (status == 'accepted') {
-        return appStatus == 'accepted' || appStatus == 'saved_accepted';
-      } else if (status == 'interviewing') {
-        return appStatus == 'interviewing' || appStatus == 'saved_interviewing';
+    final applications = _tabApplications[status] ?? [];
+    final isLoading = _tabLoadingStates[status] ?? false;
+    
+    if (isLoading && applications.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final filteredApplications = applications.where((app) {
+      final appStatus = app['status'] as String?;
+      if (appStatus == null) return false;
+      
+      switch (status) {
+        case 'accepted':
+          return appStatus == 'accepted';
+        case 'interviewing':
+          return appStatus == 'interviewing' || appStatus == 'interviewing_saved';
+        case 'saved':
+          return appStatus == 'saved' || appStatus == 'interviewing_saved';
+        default:
+          return false;
       }
-      return false;
     }).toList();
 
-    if (filteredApplications.isEmpty) {
+    if (!isLoading && filteredApplications.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
+              status == 'accepted' ? Icons.check_circle : 
+              status == 'interviewing' ? Icons.schedule :
               Icons.bookmark,
               size: 64,
               color: Colors.grey[300],
@@ -767,423 +1095,486 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
       );
     }
 
-    return ListView.builder(
-      itemCount: filteredApplications.length,
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      itemBuilder: (context, index) {
-        final application = filteredApplications[index];
-        return Dismissible(
-          key: Key(application['id']),
-          direction: DismissDirection.horizontal,
-          onDismissed: (direction) {
-            final newStatus = direction == DismissDirection.endToStart
-                ? 'rejected'
-                : 'accepted';
-            _updateApplicationStatus(application['id'], newStatus);
-          },
-          confirmDismiss: (direction) async {
-            // Show confirmation dialog for rejection
-            if (direction == DismissDirection.endToStart) {
-              return await showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Reject Application?'),
-                  content: const Text('Are you sure you want to reject this application?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(true),
-                      child: const Text('Reject'),
-                    ),
-                  ],
-                ),
-              );
+    return Stack(
+      children: [
+        GridView.builder(
+          padding: const EdgeInsets.all(4),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 2,
+            mainAxisSpacing: 2,
+            childAspectRatio: 0.6,
+          ),
+          itemCount: filteredApplications.length,
+          itemBuilder: (context, index) {
+            final application = filteredApplications[index];
+            final profile = application['profiles'] as Map<String, dynamic>;
+            final videoUrl = application['video_url'];
+            List<String> skills = [];
+            
+            // Handle skills data type conversion
+            if (profile['skills'] != null) {
+              if (profile['skills'] is String) {
+                // If skills is a string, convert it to a list
+                skills = profile['skills']
+                    .toString()
+                    .replaceAll('[', '')
+                    .replaceAll(']', '')
+                    .split(',')
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+              } else if (profile['skills'] is List) {
+                // If skills is already a list, map it to strings
+                skills = (profile['skills'] as List)
+                    .map((s) => s.toString().trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+              }
             }
-            return true;
+            
+            return GestureDetector(
+              onTap: () async {
+                // Dispose all current video controllers before navigating
+                for (var controller in _videoControllers.values) {
+                  await controller.dispose();
+                }
+                _videoControllers.clear();
+                
+                if (!mounted) return;
+                
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => VideoPlayerScreen(
+                      videoId: application['id'],
+                      videoUrl: application['video_url'],
+                      username: application['profiles']['name'] ?? 'Anonymous',
+                      description: application['cover_note'] ?? '',
+                      thumbnailUrl: _thumbnails[application['video_url']] != null 
+                          ? 'data:image/jpeg;base64,${base64Encode(_thumbnails[application['video_url']]!)}'
+                          : '',
+                      displayName: application['profiles']['name'] ?? 'Anonymous',
+                      photoUrl: application['profiles']['photo_url'],
+                      userId: application['profiles']['id'],
+                      applicationId: application['id'],
+                      applicationStatus: application['status'],
+                    ),
+                  ),
+                ).then((_) async {
+                  // Clean up video controllers when returning from the detail view
+                  for (var controller in _videoControllers.values) {
+                    await controller.dispose();
+                  }
+                  _videoControllers.clear();
+                });
+              },
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (_thumbnails[videoUrl] != null)
+                    Image.memory(
+                      _thumbnails[videoUrl]!,
+                      fit: BoxFit.cover,
+                    )
+                  else
+                    Container(
+                      color: Colors.grey[900],
+                      child: const Center(
+                        child: CircularProgressIndicator(),
+                      ),
+                    ),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withOpacity(0.7),
+                        ],
+                        stops: const [0.7, 1.0],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    bottom: 8,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          profile['name'] ?? 'Anonymous',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (profile['experience_years'] != null)
+                          Text(
+                            '${profile['experience_years']} yrs exp',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.8),
+                              fontSize: 10,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        if (skills.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            skills.take(2).join(' • '),
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 10,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
           },
-          background: Container(
-            color: Colors.green,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 20.0),
-            child: const Icon(Icons.check, color: Colors.white, size: 36),
+        ),
+        if (isLoading)
+          Positioned(
+            top: 16,
+            right: 16,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            ),
           ),
-          secondaryBackground: Container(
-            color: Colors.red,
-            alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.only(left: 20.0),
-            child: const Icon(Icons.close, color: Colors.white, size: 36),
-          ),
-          child: _buildApplicationCard(application),
-        );
-      },
+      ],
     );
   }
 
   Widget _buildApplicationVideo(Map<String, dynamic> application) {
-    return GestureDetector(
-      onHorizontalDragEnd: (details) async {
-        if (details.primaryVelocity == null) return;
-        
-        // Swipe left for reject
-        if (details.primaryVelocity! < -1000) {
-          // Show confirmation dialog for rejection
-          final shouldReject = await showDialog<bool>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Reject Application?'),
-              content: const Text('Are you sure you want to reject this application?'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('Cancel'),
+    return Stack(
+      children: [
+        // Full screen video player
+        Positioned.fill(
+          child: _buildVideoPlayer(application['video_url']),
+        ),
+
+        // Right side action buttons with background
+        Positioned(
+          right: 16,
+          top: MediaQuery.of(context).size.height * 0.3,
+          child: Column(
+            children: [
+              _buildCircularButton(
+                icon: (application['status'] == 'saved' || application['status'] == 'interviewing_saved') 
+                    ? Icons.bookmark 
+                    : Icons.bookmark_border,
+                label: (application['status'] == 'saved' || application['status'] == 'interviewing_saved') 
+                    ? 'Unsave' 
+                    : 'Save',
+                onTap: () => _updateApplicationStatus(
+                  application['id'],
+                  (application['status'] == 'saved' || application['status'] == 'interviewing_saved')
+                      ? (application['status'] == 'interviewing_saved' ? 'interviewing' : 'pending')
+                      : (application['status'] == 'interviewing' ? 'interviewing_saved' : 'saved')
                 ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  style: TextButton.styleFrom(foregroundColor: Colors.red),
-                  child: const Text('Reject'),
+              ),
+              const SizedBox(height: 16),
+              _buildCircularButton(
+                icon: Icons.person_outline,
+                label: 'Profile',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => UserProfileScreen(
+                      userId: application['profiles']['id'],
+                    ),
+                  ),
+                ),
+              ),
+              if (application['resume_url'] != null) ...[
+                const SizedBox(height: 16),
+                _buildCircularButton(
+                  icon: Icons.description_outlined,
+                  label: 'Resume',
+                  onTap: () => launchUrl(Uri.parse(application['resume_url'])),
                 ),
               ],
-            ),
-          );
-          
-          if (shouldReject == true) {
-            _updateApplicationStatus(application['id'], 'rejected');
-          }
-        }
-        // Swipe right for accept/interview
-        else if (details.primaryVelocity! > 1000) {
-          final choice = await showDialog<String>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Accept or Interview?'),
-              content: const Text('Would you like to accept this candidate or schedule an interview?'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop('interview'),
-                  style: TextButton.styleFrom(foregroundColor: Colors.blue),
-                  child: const Text('Schedule Interview'),
+            ],
+          ),
+        ),
+
+        // Bottom section with user info and action buttons
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // User info with gradient background
+              Container(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.8),
+                      Colors.black.withOpacity(0.0),
+                    ],
+                  ),
                 ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop('accept'),
-                  style: TextButton.styleFrom(foregroundColor: Colors.green),
-                  child: const Text('Accept'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 20,
+                          backgroundImage: application['profiles']['photo_url'] != null
+                              ? NetworkImage(application['profiles']['photo_url'])
+                              : null,
+                          backgroundColor: Colors.grey[800],
+                          child: application['profiles']['photo_url'] == null
+                              ? const Icon(Icons.person, color: Colors.white70)
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                application['profiles']['name'] ?? 'Anonymous',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              if (application['cover_note'] != null && 
+                                  application['cover_note'].toString().isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    application['cover_note'],
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-              ],
+              ),
+              // Show Accept/Reject buttons
+              Container(
+                color: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                child: Center(
+                  child: SizedBox(
+                    width: 240,
+                    child: _currentView == 'accepted'
+                        ? Container()
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  child: ElevatedButton(
+                                    onPressed: () => _showRejectDialog(application['id']),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.grey[200],
+                                      foregroundColor: Colors.black87,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(30),
+                                      ),
+                                    ),
+                                    child: const Text('Reject'),
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  child: ElevatedButton(
+                                    onPressed: () => _showAcceptDialog(application['id']),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Theme.of(context).primaryColor,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(30),
+                                      ),
+                                    ),
+                                    child: const Text('Accept'),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCircularButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final bool isSaved = label == 'Unsave';
+    
+    return Column(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: isSaved ? Colors.blue : Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: IconButton(
+            icon: Icon(icon),
+            onPressed: onTap,
+            color: isSaved ? Colors.white : Colors.black87,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: isSaved ? FontWeight.bold : FontWeight.normal,
+            shadows: const [
+              Shadow(
+                color: Colors.black,
+                blurRadius: 8,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Add this new method for the empty state
+  Widget _buildEmptyState() {
+    return Container(
+      color: Colors.white,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.check_circle_outline,
+              size: 64,
+              color: Colors.grey[400],
             ),
-          );
-          
-          if (choice != null) {
-            _updateApplicationStatus(
-              application['id'], 
-              choice == 'accept' ? 'accepted' : 'interviewing'
-            );
-          }
-        }
-      },
-      child: Stack(
-        children: [
-          _buildVideoPlayer(application['video_url']),
-          _buildApplicationInfo(application),
-        ],
+            const SizedBox(height: 16),
+            Text(
+              'All caught up!',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[800],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'You\'ve reviewed all applications',
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildApplicationCard(Map<String, dynamic> application) {
-    final profile = application['profiles'] as Map<String, dynamic>;
-    final hasResume = application['resume_url'] != null;
-    final isSaved = application['status'] == 'saved' || 
-                    application['status'].toString().startsWith('saved_');
-    
-    // Convert skills to List<String> regardless of input type
-    List<String> skills = [];
-    if (profile['skills'] != null) {
-      if (profile['skills'] is List) {
-        skills = (profile['skills'] as List).map((skill) => skill.toString()).toList();
-      } else if (profile['skills'] is String) {
-        // If skills is a string, split it by commas
-        skills = (profile['skills'] as String).split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-      }
-    }
-    
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        children: [
-          ListTile(
-            leading: CircleAvatar(
-              backgroundImage: profile['photo_url'] != null
-                  ? NetworkImage(profile['photo_url'])
-                  : null,
-              child: profile['photo_url'] == null
-                  ? const Icon(Icons.person)
-                  : null,
-            ),
-            title: Text(
-              profile['name'] ?? 'Anonymous',
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 4),
-                if (profile['location'] != null) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.location_on, size: 16),
-                      const SizedBox(width: 4),
-                      Text(profile['location']),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                ],
-                if (profile['experience_years'] != null) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.work, size: 16),
-                      const SizedBox(width: 4),
-                      Text('${profile['experience_years']} years experience'),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                ],
-                if (profile['education'] != null) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.school, size: 16),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          profile['education'],
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                ],
-                if (skills.isNotEmpty) ...[
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: skills
-                        .map((skill) => Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                skill,
-                                style: const TextStyle(fontSize: 12),
-                              ),
-                            ))
-                        .toList(),
-                  ),
-                ],
-              ],
-            ),
-            isThreeLine: true,
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () async {
-                          try {
-                            await _initializeVideoController(application['video_url']);
-                            if (!mounted) return;
-                            
-                            if (_videoControllers[application['video_url']] == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Error loading video'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                              return;
-                            }
+  Future<void> _shareVideo(String applicationId, Map<String, dynamic> application) async {
+    try {
+      final currentUserId = supabase.auth.currentUser?.id;
+      if (currentUserId == null) return;
 
-                            showDialog(
-                              context: context,
-                              builder: (context) => Dialog(
-                                backgroundColor: Colors.black,
-                                insetPadding: EdgeInsets.zero,
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    AspectRatio(
-                                      aspectRatio: 9 / 16,
-                                      child: VideoPlayer(_videoControllers[application['video_url']]!),
-                                    ),
-                                    StatefulBuilder(
-                                      builder: (context, setState) {
-                                        final controller = _videoControllers[application['video_url']]!;
-                                        controller.play();
-                                        return GestureDetector(
-                                          onTap: () {
-                                            setState(() {
-                                              if (controller.value.isPlaying) {
-                                                controller.pause();
-                                              } else {
-                                                controller.play();
-                                              }
-                                            });
-                                          },
-                                          child: Container(
-                                            color: Colors.transparent,
-                                            child: Center(
-                                              child: AnimatedOpacity(
-                                                opacity: controller.value.isPlaying ? 0.0 : 1.0,
-                                                duration: const Duration(milliseconds: 200),
-                                                child: Container(
-                                                  padding: const EdgeInsets.all(16),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.black.withOpacity(0.5),
-                                                    shape: BoxShape.circle,
-                                                  ),
-                                                  child: Icon(
-                                                    controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                                                    color: Colors.white,
-                                                    size: 40,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    Positioned(
-                                      top: 8,
-                                      right: 8,
-                                      child: IconButton(
-                                        icon: const Icon(Icons.close, color: Colors.white),
-                                        onPressed: () {
-                                          _videoControllers[application['video_url']]?.pause();
-                                          Navigator.of(context).pop();
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ).then((_) {
-                              // Pause video when dialog is closed
-                              _videoControllers[application['video_url']]?.pause();
-                            });
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Error playing video: $e'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          }
-                        },
-                        icon: const Icon(Icons.play_arrow),
-                        label: const Text('Play Video'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => UserProfileScreen(
-                                userId: profile['id'],
-                              ),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.person),
-                        label: const Text('View Profile'),
-                      ),
-                    ),
-                  ],
-                ),
-                if (hasResume) ...[
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final url = application['resume_url'];
-                        if (url != null) {
-                          try {
-                            await launchUrl(Uri.parse(url));
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Could not open resume'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          }
-                        }
-                      },
-                      icon: const Icon(Icons.description),
-                      label: const Text('View Resume'),
-                    ),
-                  ),
-                ],
-                // Add accept/reject buttons for saved applications
-                if (_currentView == 'saved') ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _showAcceptDialog(application['id']),
-                          icon: const Icon(Icons.check),
-                          label: const Text('Accept'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _showRejectDialog(application['id']),
-                          icon: const Icon(Icons.close),
-                          label: const Text('Reject'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+      // Get user's connections
+      final connectionsResponse = await supabase
+          .from('connections')
+          .select('''
+            *,
+            profiles!receiver_id (*),
+            requester_profile:profiles!requester_id (*)
+          ''')
+          .eq('status', 'accepted')
+          .or('requester_id.eq.${currentUserId},receiver_id.eq.${currentUserId}');
+
+      final connections = List<Map<String, dynamic>>.from(connectionsResponse);
+      
+      if (!mounted) return;
+
+      // Show connection selection dialog
+      final selectedConnections = await showDialog<List<String>>(
+        context: context,
+        builder: (context) => _ShareDialog(connections: connections, currentUserId: currentUserId),
+      );
+
+      if (selectedConnections == null || selectedConnections.isEmpty) return;
+
+      // Share with selected connections
+      for (final connectionId in selectedConnections) {
+        await supabase.from('shared_applications').insert({
+          'application_id': applicationId,
+          'shared_by': currentUserId,
+          'shared_with': connectionId,
+        });
+      }
+
+      _showNotification('Application shared successfully');
+    } catch (e) {
+      print('Error sharing application: $e');
+      _showNotification('Error sharing application', isSuccess: false);
+    }
   }
 
   @override
@@ -1193,38 +1584,63 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
         : 'Applications';
 
     return Scaffold(
-      backgroundColor: _currentView == 'all' ? Colors.black : Colors.white,
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: _currentView == 'all' ? Colors.transparent : Colors.white,
+        backgroundColor: Colors.white,
         elevation: 0,
-        title: Text(title),
+        iconTheme: const IconThemeData(
+          color: Colors.black,
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          color: Colors.black,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: Colors.black,
+          ),
+        ),
         actions: [
           if (_currentView == 'all' && _applications.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(right: 16),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.4),
+                color: Colors.grey[200],
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
                 '${_currentIndex + 1}/${_applications.length}',
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: Colors.black87,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
+          if (_currentView != 'all')
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadApplications,
+              tooltip: 'Refresh applications',
+            ),
           if (widget.showFolderView)
             IconButton(
               icon: Icon(
                 _currentView == 'all' ? Icons.folder : Icons.play_circle,
-                color: _currentView == 'all' ? Colors.white : Colors.black,
+                color: Colors.black,
               ),
-              onPressed: () {
+              onPressed: () async {
+                // Pause all videos when switching to folder view
+                if (_currentView == 'all') {
+                  for (var controller in _videoControllers.values) {
+                    await controller.pause();
+                  }
+                }
                 setState(() {
-                  _currentView = _currentView == 'all' ? 'saved' : 'all';
+                  _currentView = _currentView == 'all' ? 'accepted' : 'all';
                   _loadApplications();
                 });
               },
@@ -1233,37 +1649,31 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _applications.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        _currentView == 'all' ? Icons.videocam_off : Icons.folder_open,
-                        size: 64,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No current applications',
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : _currentView == 'all'
-                  ? PageView.builder(
-                      controller: _pageController,
-                      itemCount: _applications.length,
-                      onPageChanged: _onPageChanged,
-                      itemBuilder: (context, index) {
-                        return _buildApplicationVideo(_applications[index]);
+          : _currentView == 'all'
+              ? _applications.isEmpty
+                  ? _buildEmptyState()
+                  : GestureDetector(
+                      onVerticalDragEnd: (details) {
+                        // Only trigger when scrolling up at the last video
+                        if (_currentIndex == _applications.length - 1 && 
+                            details.primaryVelocity! < 0) {
+                          setState(() {
+                            _applications = [];  // Show empty state
+                          });
+                        }
                       },
+                      child: PageView.builder(
+                        controller: _pageController,
+                        itemCount: _applications.length,
+                        scrollDirection: Axis.vertical,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        onPageChanged: _onPageChanged,
+                        itemBuilder: (context, index) {
+                          return _buildApplicationVideo(_applications[index]);
+                        },
+                      ),
                     )
-                  : _buildFolderView(),
+              : _buildFolderView(),
     );
   }
 
@@ -1275,5 +1685,81 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
     _nextVideoController?.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+}
+
+// Add ShareDialog widget
+class _ShareDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> connections;
+  final String currentUserId;
+
+  const _ShareDialog({
+    required this.connections,
+    required this.currentUserId,
+  });
+
+  @override
+  _ShareDialogState createState() => _ShareDialogState();
+}
+
+class _ShareDialogState extends State<_ShareDialog> {
+  final Set<String> _selectedConnections = {};
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Share with Connections'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: widget.connections.isEmpty
+            ? const Center(
+                child: Text('No connections found'),
+              )
+            : ListView.builder(
+                shrinkWrap: true,
+                itemCount: widget.connections.length,
+                itemBuilder: (context, index) {
+                  final connection = widget.connections[index];
+                  final isRequester = connection['requester_id'] == widget.currentUserId;
+                  final userProfile = isRequester
+                      ? connection['profiles']
+                      : connection['requester_profile'];
+                  final userId = userProfile['id'];
+                  final userName = userProfile['name'] ?? 'Anonymous';
+                  final photoUrl = userProfile['photo_url'];
+
+                  return CheckboxListTile(
+                    value: _selectedConnections.contains(userId),
+                    onChanged: (bool? value) {
+                      setState(() {
+                        if (value == true) {
+                          _selectedConnections.add(userId);
+                        } else {
+                          _selectedConnections.remove(userId);
+                        }
+                      });
+                    },
+                    title: Text(userName),
+                    secondary: CircleAvatar(
+                      backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+                      child: photoUrl == null ? const Icon(Icons.person) : null,
+                    ),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _selectedConnections.isEmpty
+              ? null
+              : () => Navigator.pop(context, _selectedConnections.toList()),
+          child: const Text('Share'),
+        ),
+      ],
+    );
   }
 } 

@@ -86,8 +86,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with SingleTickerProvid
       final response = await supabase
           .from('videos')
           .select('''
-            *,
+            id,
+            url,
             title,
+            description,
+            category,
+            created_at,
+            user_id,
             profiles!inner (
               id,
               username,
@@ -99,7 +104,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with SingleTickerProvid
           .eq('category', category)
           .order('created_at', ascending: false);
 
-      print('Fetched ${category} videos: $response'); // Debug print
       return List<Map<String, dynamic>>.from(response);
     } catch (e) {
       print('Error fetching $category videos: $e');
@@ -155,14 +159,28 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with SingleTickerProvid
                           key: const PageStorageKey('business_videos'),
                           scrollDirection: Axis.vertical,
                           controller: _businessPageController,
+                          physics: const BouncingScrollPhysics(
+                            parent: AlwaysScrollableScrollPhysics(),
+                          ),
                           itemCount: _businessVideos.length,
                           itemBuilder: (context, index) {
                             final isVisible = index == _currentBusinessIndex && 
                                            _tabController.index == 0;
-                            return VideoPlayerWidget(
-                              key: ValueKey('business_${_businessVideos[index]['id']}'),
-                              video: VideoModel.fromJson(_businessVideos[index]),
-                              autoPlay: isVisible,
+                            return AnimatedOpacity(
+                              duration: const Duration(milliseconds: 200),
+                              opacity: isVisible ? 1.0 : 0.8,
+                              child: Transform.scale(
+                                scale: isVisible ? 1.0 : 0.95,
+                                child: SizedBox(
+                                  width: MediaQuery.of(context).size.width,
+                                  height: MediaQuery.of(context).size.height,
+                                  child: VideoPlayerWidget(
+                                    key: ValueKey('business_${_businessVideos[index]['id']}'),
+                                    video: VideoModel.fromJson(_businessVideos[index]),
+                                    autoPlay: isVisible,
+                                  ),
+                                ),
+                              ),
                             );
                           },
                         ),
@@ -173,14 +191,28 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with SingleTickerProvid
                           key: const PageStorageKey('employee_videos'),
                           scrollDirection: Axis.vertical,
                           controller: _employeePageController,
+                          physics: const BouncingScrollPhysics(
+                            parent: AlwaysScrollableScrollPhysics(),
+                          ),
                           itemCount: _employeeVideos.length,
                           itemBuilder: (context, index) {
                             final isVisible = index == _currentEmployeeIndex && 
                                            _tabController.index == 1;
-                            return VideoPlayerWidget(
-                              key: ValueKey('employee_${_employeeVideos[index]['id']}'),
-                              video: VideoModel.fromJson(_employeeVideos[index]),
-                              autoPlay: isVisible,
+                            return AnimatedOpacity(
+                              duration: const Duration(milliseconds: 200),
+                              opacity: isVisible ? 1.0 : 0.8,
+                              child: Transform.scale(
+                                scale: isVisible ? 1.0 : 0.95,
+                                child: SizedBox(
+                                  width: MediaQuery.of(context).size.width,
+                                  height: MediaQuery.of(context).size.height,
+                                  child: VideoPlayerWidget(
+                                    key: ValueKey('employee_${_employeeVideos[index]['id']}'),
+                                    video: VideoModel.fromJson(_employeeVideos[index]),
+                                    autoPlay: isVisible,
+                                  ),
+                                ),
+                              ),
                             );
                           },
                         ),

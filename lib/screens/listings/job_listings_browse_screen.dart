@@ -27,6 +27,9 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
     'Internship',
   ];
 
+  RangeValues _salaryRange = const RangeValues(0, 500000);
+  bool _showFilters = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,61 +43,64 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
 
-      var query = supabase
+      final response = await supabase
           .from('job_listings')
           .select('''
             *,
-            profiles (
+            profiles!business_id (
+              id,
               business_name,
-              industry,
+              photo_url,
               location,
-              photo_url
+              industry
             ),
-            job_applications!left (
+            job_applications!job_listing_id (
+              id,
               status,
               applicant_id
             )
           ''')
-          .eq('is_active', true);
-
-      if (_selectedEmploymentType != 'All') {
-        query = query.eq('employment_type', _selectedEmploymentType);
-      }
-
-      if (_searchController.text.isNotEmpty) {
-        query = query.or(
-          'title.ilike.%${_searchController.text}%,description.ilike.%${_searchController.text}%'
-        );
-      }
-
-      final response = await query.order('created_at', ascending: false);
-
-      // Filter job applications to only show the current user's application status
-      final listings = List<Map<String, dynamic>>.from(response).map((listing) {
-        final applications = (listing['job_applications'] as List)
-            .where((app) => app['applicant_id'] == userId)
-            .toList();
-        return {
-          ...listing,
-          'job_applications': applications,
-        };
-      }).toList();
+          .eq('is_active', true)
+          .order('created_at', ascending: false);
 
       setState(() {
-        _listings = listings;
+        _listings = List<Map<String, dynamic>>.from(response);
         _isLoading = false;
       });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading listings: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Error loading listings: $e')),
         );
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  List<Map<String, dynamic>> _filterListings(List<Map<String, dynamic>> listings) {
+    return listings.where((listing) {
+      final business = listing['profiles'] as Map<String, dynamic>;
+      final minSalary = listing['min_salary'] as num? ?? 0;
+      final maxSalary = listing['max_salary'] as num? ?? minSalary;
+      
+      // Filter by search text
+      final searchText = _searchController.text.toLowerCase();
+      final matchesSearch = listing['title'].toString().toLowerCase().contains(searchText) ||
+          business['business_name'].toString().toLowerCase().contains(searchText) ||
+          listing['description'].toString().toLowerCase().contains(searchText);
+
+      // Filter by employment type
+      final matchesType = _selectedEmploymentType == 'All' ||
+          listing['employment_type'] == _selectedEmploymentType;
+
+      // Filter by salary range
+      final matchesSalary = maxSalary >= _salaryRange.start &&
+          minSalary <= _salaryRange.end;
+
+      return matchesSearch &&
+          matchesType &&
+          matchesSalary;
+    }).toList();
   }
 
   Color _getStatusColor(String status) {
@@ -112,45 +118,160 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
     }
   }
 
-  Widget _buildSearchBar() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
+  Widget _buildFilterSheet() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey[300]!,
+            blurRadius: 8,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search jobs...',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Filter Jobs',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              onSubmitted: (_) => _loadListings(),
-            ),
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
           ),
-          const SizedBox(width: 16),
-          DropdownButton<String>(
-            value: _selectedEmploymentType,
-            items: _employmentTypes.map((type) {
-              return DropdownMenuItem(
-                value: type,
-                child: Text(type),
-              );
-            }).toList(),
-            onChanged: (value) {
-              if (value != null) {
-                setState(() {
-                  _selectedEmploymentType = value;
-                });
-                _loadListings();
-              }
+          const SizedBox(height: 20),
+          Text(
+            'Salary Range',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          RangeSlider(
+            values: _salaryRange,
+            min: 0,
+            max: 500000,
+            divisions: 50,
+            labels: RangeLabels(
+              '\$${_salaryRange.start.round()}',
+              '\$${_salaryRange.end.round()}',
+            ),
+            onChanged: (values) {
+              setState(() {
+                _salaryRange = values;
+              });
             },
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _salaryRange = const RangeValues(0, 500000);
+                      _selectedEmploymentType = 'All';
+                    });
+                    Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    foregroundColor: Colors.black87,
+                  ),
+                  child: const Text('Reset'),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                  },
+                  child: const Text('Apply'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: Colors.grey[200]!),
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search jobs...',
+                    prefixIcon: const Icon(Icons.search),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  onChanged: (value) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: Icon(
+                  Icons.filter_list,
+                  color: _showFilters ? Theme.of(context).primaryColor : null,
+                ),
+                onPressed: () {
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (context) => _buildFilterSheet(),
+                  );
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                ..._employmentTypes.map((type) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(type),
+                    selected: _selectedEmploymentType == type,
+                    onSelected: (selected) {
+                      if (selected) {
+                        setState(() => _selectedEmploymentType = type);
+                      }
+                    },
+                  ),
+                )),
+              ],
+            ),
           ),
         ],
       ),
@@ -209,8 +330,9 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                         ),
                         Text(
                           business['business_name'] ?? 'Unknown Business',
-                          style: TextStyle(
-                            color: Colors.grey[600],
+                          style: const TextStyle(
+                            color: Colors.black87,
+                            fontSize: 16,
                           ),
                         ),
                       ],
@@ -246,22 +368,15 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                     listing['employment_type'],
                     style: TextStyle(color: Colors.grey[600]),
                   ),
-                  const SizedBox(width: 16),
-                  Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
-                  const SizedBox(width: 4),
-                  Text(
-                    listing['location'],
-                    style: TextStyle(color: Colors.grey[600]),
-                  ),
                 ],
               ),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.business_center, size: 16, color: Colors.grey[600]),
+                  Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
                   const SizedBox(width: 4),
                   Text(
-                    business['industry'] ?? 'Various Industries',
+                    listing['location'],
                     style: TextStyle(color: Colors.grey[600]),
                   ),
                 ],
@@ -278,6 +393,12 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
     final minSalary = listing['min_salary'] as num?;
     final maxSalary = listing['max_salary'] as num?;
     final isRemote = listing['is_remote'] ?? false;
+    final userId = supabase.auth.currentUser?.id;
+    final applications = listing['job_applications'] as List;
+    final hasApplied = applications.any((app) => app['applicant_id'] == userId);
+    final applicationStatus = hasApplied 
+        ? applications.firstWhere((app) => app['applicant_id'] == userId)['status']
+        : null;
     
     String salaryText;
     if (minSalary != null) {
@@ -313,14 +434,20 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                 children: [
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 30,
-                        backgroundImage: business['photo_url'] != null
-                            ? NetworkImage(business['photo_url'])
-                            : null,
-                        child: business['photo_url'] == null
-                            ? const Icon(Icons.business, size: 30)
-                            : null,
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context); // Close the bottom sheet
+                          context.push('/business-profile/${business['id']}');
+                        },
+                        child: CircleAvatar(
+                          radius: 30,
+                          backgroundImage: business['photo_url'] != null
+                              ? NetworkImage(business['photo_url'])
+                              : null,
+                          child: business['photo_url'] == null
+                              ? const Icon(Icons.business, size: 30)
+                              : null,
+                        ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
@@ -334,11 +461,28 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            Text(
-                              business['business_name'] ?? 'Unknown Business',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.grey[600],
+                            InkWell(
+                              onTap: () {
+                                Navigator.pop(context); // Close the bottom sheet
+                                context.push('/business-profile/${business['id']}');
+                              },
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      business['business_name'] ?? 'Unknown Business',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        color: Theme.of(context).primaryColor,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.arrow_forward_ios,
+                                    size: 16,
+                                    color: Theme.of(context).primaryColor,
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -356,11 +500,6 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                     'Location',
                     listing['location'],
                     Icons.location_on,
-                  ),
-                  _buildDetailSection(
-                    'Industry',
-                    business['industry'] ?? 'Various Industries',
-                    Icons.business_center,
                   ),
                   _buildDetailSection(
                     'Salary',
@@ -400,30 +539,63 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context); // Close the bottom sheet
-                        context.push(
-                          '/submit-application/${listing['id']}?title=${Uri.encodeComponent(listing['title'])}&business=${Uri.encodeComponent(business['business_name'] ?? 'Unknown Business')}',
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                  if (hasApplied) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(applicationStatus!).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _getStatusColor(applicationStatus),
                         ),
                       ),
-                      child: const Text(
-                        'Apply Now',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                      child: Column(
+                        children: [
+                          Text(
+                            'Application Status',
+                            style: TextStyle(
+                              color: _getStatusColor(applicationStatus),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            applicationStatus[0].toUpperCase() + applicationStatus.substring(1),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: _getStatusColor(applicationStatus),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context); // Close the bottom sheet
+                          context.push(
+                            '/submit-application/${listing['id']}?title=${Uri.encodeComponent(listing['title'])}&business=${Uri.encodeComponent(business['business_name'] ?? 'Unknown Business')}',
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Apply Now',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
             );
@@ -438,16 +610,16 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         children: [
-          Icon(icon, color: Colors.grey[600]),
+          Icon(icon, color: Colors.black87),
           const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 label,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 14,
-                  color: Colors.grey[600],
+                  color: Colors.black87,
                 ),
               ),
               Text(
@@ -455,6 +627,7 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
+                  color: Colors.black,
                 ),
               ),
             ],
@@ -466,65 +639,178 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('Browse Jobs'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadListings,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildSearchBar(),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: () async {
-                await _loadListings();
-              },
-              child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _listings.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.work_off,
-                              size: 64,
-                              color: Colors.grey[400],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'No job listings found',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            TextButton.icon(
-                              onPressed: _loadListings,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Refresh'),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: _listings.length,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemBuilder: (context, index) {
-                          return _buildListingCard(_listings[index]);
-                        },
-                      ),
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Browse Jobs'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadListings,
             ),
-          ),
-        ],
+          ],
+        ),
+        body: Column(
+          children: [
+            // Add TabBar for filtering
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border(
+                  bottom: BorderSide(
+                    color: Colors.grey[200]!,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: TabBar(
+                tabs: const [
+                  Tab(text: 'All'),
+                  Tab(text: 'Applied'),
+                ],
+                labelColor: Colors.black,
+                unselectedLabelColor: Colors.grey,
+                labelStyle: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+                unselectedLabelStyle: const TextStyle(
+                  fontWeight: FontWeight.normal,
+                  fontSize: 16,
+                ),
+                indicatorColor: Colors.black,
+                indicatorWeight: 2,
+              ),
+            ),
+            _buildSearchBar(),
+            // Add TabBarView for content
+            Expanded(
+              child: TabBarView(
+                children: [
+                  // All listings tab
+                  RefreshIndicator(
+                    onRefresh: () async {
+                      await _loadListings();
+                    },
+                    child: _buildListingsView(),
+                  ),
+                  // Applied listings tab
+                  RefreshIndicator(
+                    onRefresh: () async {
+                      await _loadListings();
+                    },
+                    child: _buildAppliedListingsView(),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildListingsView() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final filteredListings = _filterListings(_listings);
+
+    if (filteredListings.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.work_off,
+              size: 64,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No job listings found',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey[600],
+              ),
+            ),
+            if (_searchController.text.isNotEmpty ||
+                _selectedEmploymentType != 'All' ||
+                _salaryRange != const RangeValues(0, 500000))
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _searchController.clear();
+                    _selectedEmploymentType = 'All';
+                    _salaryRange = const RangeValues(0, 500000);
+                  });
+                },
+                child: const Text('Clear Filters'),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: filteredListings.length,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemBuilder: (context, index) {
+        return _buildListingCard(filteredListings[index]);
+      },
+    );
+  }
+
+  Widget _buildAppliedListingsView() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    
+    final userId = supabase.auth.currentUser?.id;
+    final appliedListings = _listings.where((listing) {
+      final applications = listing['job_applications'] as List;
+      return applications.any((app) => app['applicant_id'] == userId);
+    }).toList();
+
+    if (appliedListings.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.description_outlined,
+              size: 64,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No applications yet',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Start applying to jobs to see them here',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[500],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: appliedListings.length,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemBuilder: (context, index) {
+        return _buildListingCard(appliedListings[index]);
+      },
     );
   }
 

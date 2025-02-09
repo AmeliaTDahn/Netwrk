@@ -10,6 +10,7 @@ import './listings/business_listings_screen.dart';
 import './listings/job_listings_browse_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/supabase_config.dart';
+import '../components/bottom_nav_bar.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
   final int initialIndex;
@@ -168,60 +169,9 @@ class _MainScreenState extends ConsumerState<MainScreen> {
 
     return Scaffold(
       body: body,
-      bottomNavigationBar: BottomNavigationBar(
+      bottomNavigationBar: BottomNavBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
-        type: BottomNavigationBarType.fixed,
-        items: _accountType == 'business' 
-          ? [
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.people_outline),
-                activeIcon: Icon(Icons.people),
-                label: 'Connect',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.work_outline),
-                activeIcon: Icon(Icons.work),
-                label: 'Listings',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.chat_outlined),
-                activeIcon: Icon(Icons.chat),
-                label: 'Messages',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.person_outline),
-                activeIcon: Icon(Icons.person),
-                label: 'Profile',
-              ),
-            ]
-          : [
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.add_circle_outline),
-                activeIcon: Icon(Icons.add_circle),
-                label: 'Create',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.people_outline),
-                activeIcon: Icon(Icons.people),
-                label: 'Connect',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.work_outline),
-                activeIcon: Icon(Icons.work),
-                label: 'Listings',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.chat_outlined),
-                activeIcon: Icon(Icons.chat),
-                label: 'Messages',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.person_outline),
-                activeIcon: Icon(Icons.person),
-                label: 'Profile',
-              ),
-            ],
       ),
     );
   }

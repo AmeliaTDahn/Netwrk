@@ -4,6 +4,9 @@ import '../../core/supabase_config.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 import '../applications/applications_screen.dart';
+import 'package:timeago/timeago.dart' as timeago;
+import '../../components/banner_notification.dart';
+import '../listings/listing_details_screen.dart';
 
 class BusinessListingsScreen extends StatefulWidget {
   const BusinessListingsScreen({super.key});
@@ -15,6 +18,7 @@ class BusinessListingsScreen extends StatefulWidget {
 class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
   bool _isLoading = true;
   List<Map<String, dynamic>> _listings = [];
+  List<Map<String, dynamic>> _sharedListings = [];
   final _currencyFormat = NumberFormat.currency(symbol: '\$');
   
   @override
@@ -30,21 +34,78 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
       final userId = supabase.auth.currentUser?.id;
       if (userId == null) return;
 
-      final response = await supabase
+      // Load owned listings
+      final ownedResponse = await supabase
           .from('job_listings')
-          .select()
+          .select('''
+            *,
+            job_applications (
+              id,
+              status,
+              applicant_id,
+              video_url,
+              resume_url,
+              cover_note,
+              created_at,
+              profiles!applicant_id (
+                id,
+                name,
+                photo_url,
+                education,
+                experience_years,
+                skills
+              )
+            )
+          ''')
           .eq('business_id', userId)
           .order('created_at', ascending: false);
 
+      // Load shared listings
+      final sharedResponse = await supabase
+          .from('shared_listings')
+          .select('''
+            *,
+            job_listings!inner (
+              *,
+              job_applications (
+                id,
+                status,
+                applicant_id,
+                video_url,
+                resume_url,
+                cover_note,
+                created_at,
+                profiles!applicant_id (
+                  id,
+                  name,
+                  photo_url,
+                  education,
+                  experience_years,
+                  skills
+                )
+              ),
+              shared_by_profile:profiles!business_id (
+                id,
+                business_name,
+                photo_url
+              )
+            )
+          ''')
+          .eq('shared_with', userId)
+          .order('shared_at', ascending: false);
+
       setState(() {
-        _listings = List<Map<String, dynamic>>.from(response);
+        _listings = (ownedResponse as List).map((item) => Map<String, dynamic>.from(item)).toList();
+        _sharedListings = (sharedResponse as List).map((shared) => {
+              ...Map<String, dynamic>.from(shared['job_listings']),
+              'shared_by': shared['shared_by'],
+              'shared_at': shared['shared_at'],
+            }).toList();
         _isLoading = false;
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading listings: $e')),
-        );
+        BannerNotification.show(context, 'Error loading listings: $e');
         setState(() => _isLoading = false);
       }
     }
@@ -230,8 +291,7 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
                       'description': _descriptionController.text,
                       'location': _isRemote ? 'Remote' : _locationController.text,
                       'is_remote': _isRemote,
-                      'min_salary': salary,
-                      'max_salary': salary,
+                      'salary': salary,
                       'requirements': _requirementsController.text,
                       'employment_type': _employmentType,
                       'is_active': true,
@@ -241,14 +301,10 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
                     if (mounted) {
                       Navigator.pop(context);
                       _loadListings();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Job listing added successfully')),
-                      );
+                      BannerNotification.show(context, 'Job listing added successfully');
                     }
                   } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error adding listing: $e')),
-                    );
+                    BannerNotification.show(context, 'Error adding listing: $e');
                   }
                 }
               },
@@ -262,17 +318,29 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
 
   Future<void> _toggleListingStatus(String listingId, bool currentStatus) async {
     try {
+      // Update the database
       await supabase
           .from('job_listings')
           .update({'is_active': !currentStatus})
           .eq('id', listingId);
 
-      _loadListings();
+      // Update local state
+      setState(() {
+        final listingIndex = _listings.indexWhere((listing) => listing['id'] == listingId);
+        if (listingIndex != -1) {
+          _listings[listingIndex]['is_active'] = !currentStatus;
+        }
+      });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating listing: $e')),
-        );
+        BannerNotification.show(context, 'Error updating listing: $e');
+        // Revert the local state if the update failed
+        setState(() {
+          final listingIndex = _listings.indexWhere((listing) => listing['id'] == listingId);
+          if (listingIndex != -1) {
+            _listings[listingIndex]['is_active'] = currentStatus;
+          }
+        });
       }
     }
   }
@@ -286,94 +354,152 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
 
       _loadListings();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Job listing deleted successfully')),
-        );
+        BannerNotification.show(context, 'Job listing deleted successfully');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting listing: $e')),
-        );
+        BannerNotification.show(context, 'Error deleting listing: $e');
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Manage Listings'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadListings,
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Manage Listings'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadListings,
+            ),
+          ],
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'My Listings'),
+              Tab(text: 'Shared with Me'),
+            ],
           ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          await _loadListings();
-        },
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _listings.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.work_off,
-                          size: 64,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No job listings yet',
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: Colors.grey[600],
+        ),
+        body: TabBarView(
+          children: [
+            // My Listings Tab
+            RefreshIndicator(
+              onRefresh: () async {
+                await _loadListings();
+              },
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _listings.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.work_off,
+                                size: 64,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No job listings yet',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.grey[600],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Tap + to create your first listing',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey[500],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 16),
+                              TextButton.icon(
+                                onPressed: _showAddListingDialog,
+                                icon: const Icon(Icons.add),
+                                label: const Text('Create Listing'),
+                              ),
+                            ],
                           ),
-                          textAlign: TextAlign.center,
+                        )
+                      : ListView.builder(
+                          itemCount: _listings.length,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          itemBuilder: (context, index) {
+                            return _buildListingCard(_listings[index]);
+                          },
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Tap + to create your first listing',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Colors.grey[500],
+            ),
+            // Shared Listings Tab
+            RefreshIndicator(
+              onRefresh: () async {
+                await _loadListings();
+              },
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _sharedListings.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.share,
+                                size: 64,
+                                color: Colors.grey[400],
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No shared listings',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.grey[600],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Listings shared with you will appear here',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.grey[500],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
                           ),
-                          textAlign: TextAlign.center,
+                        )
+                      : ListView.builder(
+                          itemCount: _sharedListings.length,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          itemBuilder: (context, index) {
+                            return _buildSharedListingCard(_sharedListings[index]);
+                          },
                         ),
-                        const SizedBox(height: 16),
-                        TextButton.icon(
-                          onPressed: _showAddListingDialog,
-                          icon: const Icon(Icons.add),
-                          label: const Text('Create Listing'),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _listings.length,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    itemBuilder: (context, index) {
-                      return _buildListingCard(_listings[index]);
-                    },
-                  ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showAddListingDialog,
-        tooltip: 'Create New Listing',
-        child: const Icon(Icons.add),
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: _showAddListingDialog,
+          tooltip: 'Create New Listing',
+          child: const Icon(Icons.add),
+        ),
       ),
     );
   }
 
   Widget _buildListingCard(Map<String, dynamic> listing) {
     final isActive = listing['is_active'] ?? false;
-    final salary = listing['min_salary'] as num?;
+    final salary = listing['salary'] as num?;
     final isRemote = listing['is_remote'] ?? false;
+    final applications = listing['job_applications'] as List;
+    final isOwner = listing['business_id'] == supabase.auth.currentUser?.id;
     
     String salaryText = salary != null 
         ? _currencyFormat.format(salary)
@@ -384,100 +510,221 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Column(
-        children: [
-          ListTile(
-            title: Text(
-              listing['title'],
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ListingDetailsScreen(listing: listing),
             ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 4),
-                Text(listing['employment_type']),
-                Row(
-                  children: [
-                    Text(listing['location']),
-                    if (isRemote) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blue),
-                        ),
-                        child: const Text(
-                          'Remote',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.blue,
-                          ),
+          ).then((_) => _loadListings()); // Refresh listings when returning
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: ListTile(
+          title: Text(
+            listing['title'],
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 4),
+              Text(listing['employment_type']),
+              Row(
+                children: [
+                  Text(listing['location']),
+                  if (isRemote) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue),
+                      ),
+                      child: const Text(
+                        'Remote',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue,
                         ),
                       ),
-                    ],
+                    ),
                   ],
+                ],
+              ),
+              Text(salaryText),
+              const SizedBox(height: 4),
+              Text(
+                '${applications.length} application${applications.length == 1 ? '' : 's'}',
+                style: TextStyle(
+                  color: Theme.of(context).primaryColor,
+                  fontWeight: FontWeight.w500,
                 ),
-                Text(salaryText),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Switch(
-                  value: isActive,
-                  onChanged: (value) => _toggleListingStatus(
-                    listing['id'],
-                    isActive,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  onPressed: () => _deleteListing(listing['id']),
-                ),
-              ],
-            ),
-            isThreeLine: true,
+              ),
+            ],
           ),
-          const Divider(height: 1),
-          InkWell(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ApplicationsScreen(
-                    jobListingId: listing['id'],
-                  ),
+          trailing: isOwner ? Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Switch(
+                value: isActive,
+                onChanged: (value) => _toggleListingStatus(
+                  listing['id'],
+                  isActive,
                 ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: () => _deleteListing(listing['id']),
+              ),
+            ],
+          ) : Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: isActive ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              isActive ? 'Active' : 'Inactive',
+              style: TextStyle(
+                color: isActive ? Colors.green : Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          isThreeLine: true,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSharedListingCard(Map<String, dynamic> listing) {
+    final isActive = listing['is_active'] ?? false;
+    final salary = listing['salary'] as num?;
+    final isRemote = listing['is_remote'] ?? false;
+    final applications = listing['job_applications'] as List;
+    final sharedBy = listing['shared_by_profile'];
+    final sharedAt = DateTime.parse(listing['shared_at']);
+    
+    String salaryText = salary != null 
+        ? _currencyFormat.format(salary)
+        : 'Salary not specified';
+    
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ListingDetailsScreen(listing: listing),
+            ),
+          ).then((_) => _loadListings());
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Column(
+          children: [
+            ListTile(
+              title: Text(
+                listing['title'],
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.video_library,
-                    color: Theme.of(context).primaryColor,
-                    size: 20,
+                  const SizedBox(height: 4),
+                  Text(listing['employment_type']),
+                  Row(
+                    children: [
+                      Text(listing['location']),
+                      if (isRemote) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.blue),
+                          ),
+                          child: const Text(
+                            'Remote',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(width: 8),
+                  Text(salaryText),
+                  const SizedBox(height: 4),
                   Text(
-                    'View Video Applications',
+                    '${applications.length} application${applications.length == 1 ? '' : 's'}',
                     style: TextStyle(
                       color: Theme.of(context).primaryColor,
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isActive ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  isActive ? 'Active' : 'Inactive',
+                  style: TextStyle(
+                    color: isActive ? Colors.green : Colors.grey,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              isThreeLine: true,
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 12,
+                    backgroundImage: sharedBy['photo_url'] != null
+                        ? NetworkImage(sharedBy['photo_url'])
+                        : null,
+                    child: sharedBy['photo_url'] == null
+                        ? const Icon(Icons.business, size: 12)
+                        : null,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Shared by ${sharedBy['business_name']} · ${timeago.format(sharedAt)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

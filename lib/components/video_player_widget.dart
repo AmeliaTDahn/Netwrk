@@ -97,11 +97,10 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   }
 
   Future<void> _initializeVideo() async {
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.video.url));
+    _controller = VideoPlayerController.network(widget.video.url);
     try {
       await _controller.initialize();
       await _controller.setLooping(true);
-      
       if (mounted) {
         setState(() {
           _isInitialized = true;
@@ -206,270 +205,48 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black,
-      child: _isInitialized
-          ? AspectRatio(
-              aspectRatio: _controller.value.aspectRatio,
-              child: GestureDetector(
-                onTap: () {
-                  setState(() {
-                    if (_controller.value.isPlaying) {
-                      _controller.pause();
-                      // When pausing, show controls (scrubbing) and hide description
-                      _showControls = true;
-                      _hideControlsTimer?.cancel(); // Don't auto-hide when paused
-                    } else {
-                      _controller.play();
-                      // When playing, immediately hide controls and show description
-                      _showControls = false;  // Immediately hide controls
-                      _hideControlsTimer?.cancel();
-                    }
-                  });
-                },
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    if (!_isInitialized && _thumbnailPath != null)
-                      Image.file(
-                        File(_thumbnailPath!),
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: MediaQuery.of(context).size.width * 16 / 9,
-                      ),
-                    if (_isInitialized)
-                      VideoPlayer(_controller),
+    if (!_isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-                    // Show title, user info, and description only when playing and controls are not shown
-                    if (!_showControls && _controller.value.isPlaying) ...[
-                      // Interaction buttons (always shown)
-                      Positioned(
-                        top: 16,
-                        right: 16,
-                        child: Column(
-                          children: [
-                            SaveButton(
-                              videoId: widget.video.id,
-                            ),
-                            const SizedBox(height: 8),
-                            IconButton(
-                              icon: const Icon(Icons.comment),
-                              color: Colors.white,
-                              onPressed: () => _showComments(context),
-                            ),
-                            const SizedBox(height: 8),
-                            // Add delete button here if user is owner
-                            if (supabase.auth.currentUser?.id == widget.video.userId) ...[
-                              IconButton(
-                                icon: const Icon(Icons.delete),
-                                color: Colors.white,
-                                onPressed: _deleteVideo,
-                                style: IconButton.styleFrom(
-                                  backgroundColor: Colors.black54,
-                                  padding: const EdgeInsets.all(8),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-
-                      // Title at the top
-                      Positioned(
-                        top: 16,
-                        left: 16,
-                        right: 48,
-                        child: GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _isTitleExpanded = !_isTitleExpanded;
-                            });
-                          },
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                widget.video.title,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                  shadows: [
-                                    Shadow(
-                                      blurRadius: 4,
-                                      color: Colors.black,
-                                      offset: Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
-                                maxLines: _isTitleExpanded ? null : 2,
-                                overflow: _isTitleExpanded ? null : TextOverflow.ellipsis,
-                              ),
-                              if (!_isTitleExpanded && widget.video.title.length > 60)
-                                Text(
-                                  'more...',
-                                  style: TextStyle(
-                                    color: Colors.white.withOpacity(0.7),
-                                    fontSize: 14,
-                                    shadows: const [
-                                      Shadow(
-                                        blurRadius: 4,
-                                        color: Colors.black,
-                                        offset: Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      // User info and description at the bottom
-                      Positioned(
-                        bottom: 16,
-                        left: 16,
-                        right: 16,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 20,
-                                        backgroundImage: widget.video.photoUrl != null
-                                            ? NetworkImage(widget.video.photoUrl!)
-                                            : null,
-                                        child: widget.video.photoUrl == null
-                                            ? const Icon(Icons.person)
-                                            : null,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          widget.video.displayName,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                            shadows: [
-                                              Shadow(
-                                                blurRadius: 4,
-                                                color: Colors.black,
-                                                offset: Offset(0, 1),
-                                              ),
-                                            ],
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _isDescriptionExpanded = !_isDescriptionExpanded;
-                                      });
-                                    },
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          widget.video.description,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            shadows: [
-                                              Shadow(
-                                                blurRadius: 4,
-                                                color: Colors.black,
-                                                offset: Offset(0, 1),
-                                              ),
-                                            ],
-                                          ),
-                                          maxLines: _isDescriptionExpanded ? null : 2,
-                                          overflow: _isDescriptionExpanded ? null : TextOverflow.ellipsis,
-                                        ),
-                                        if (!_isDescriptionExpanded && widget.video.description.length > 100)
-                                          Text(
-                                            'more...',
-                                            style: TextStyle(
-                                              color: Colors.white.withOpacity(0.7),
-                                              fontSize: 14,
-                                              shadows: const [
-                                                Shadow(
-                                                  blurRadius: 4,
-                                                  color: Colors.black,
-                                                  offset: Offset(0, 1),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            // Connect/Profile button
-                            SizedBox(
-                              width: 100,
-                              child: _buildActionButton(),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-
-                    // Show progress bar only when paused (controls shown)
-                    if (_showControls)
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
-                              colors: [
-                                Colors.black.withOpacity(0.7),
-                                Colors.transparent,
-                              ],
-                            ),
-                          ),
-                          child: VideoProgressIndicator(
-                            _controller,
-                            allowScrubbing: true,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            colors: VideoProgressColors(
-                              playedColor: Theme.of(context).primaryColor,
-                              bufferedColor: Colors.white.withOpacity(0.5),
-                              backgroundColor: Colors.white.withOpacity(0.2),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          if (_controller.value.isPlaying) {
+            _controller.pause();
+          } else {
+            _controller.play();
+          }
+          _isPlaying = _controller.value.isPlaying;
+        });
+      },
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          VideoPlayer(_controller),
+          AnimatedOpacity(
+            opacity: !_isPlaying ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              color: Colors.black.withOpacity(0.3),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow,
+                    size: 32,
+                    color: Colors.white,
+                  ),
                 ),
               ),
-            )
-          : const Center(
-              child: CircularProgressIndicator(
-                color: Colors.white,
-              ),
             ),
+          ),
+        ],
+      ),
     );
   }
 

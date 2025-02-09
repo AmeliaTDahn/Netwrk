@@ -4,6 +4,7 @@ import '../../core/supabase_config.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import '../../components/skills_input.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -34,7 +35,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _websiteController = TextEditingController();
 
   // Employee-specific fields
-  final _skillsController = TextEditingController();
+  List<String> _skills = [];
   final _educationController = TextEditingController();
   final _experienceYearsController = TextEditingController();
   
@@ -179,14 +180,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           'website': _websiteController.text,
         });
       } else {
-        final List<String> skills = _skillsController.text
-            .split(',')
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)
-            .toList();
-
         profileData.addAll({
-          'skills': skills,
+          'skills': _skills,
           'education': _educationController.text,
           'experience_years': int.tryParse(_experienceYearsController.text) ?? 0,
         });
@@ -479,16 +474,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               label: 'Website',
             ),
           ] else ...[
-            _buildTextField(
-              controller: _skillsController,
-              label: 'Skills',
-              hint: 'e.g. JavaScript, Flutter, Project Management',
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter at least one skill';
-                }
-                return null;
-              },
+            Container(
+              padding: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12, top: 8),
+                    child: Text(
+                      'Skills',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  SkillsInput(
+                    skills: _skills,
+                    onChanged: (newSkills) {
+                      setState(() => _skills = newSkills);
+                    },
+                  ),
+                ],
+              ),
             ),
             _buildTextField(
               controller: _educationController,
@@ -668,7 +680,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _businessNameController.dispose();
     _industryController.dispose();
     _websiteController.dispose();
-    _skillsController.dispose();
     _educationController.dispose();
     _experienceYearsController.dispose();
     super.dispose();
