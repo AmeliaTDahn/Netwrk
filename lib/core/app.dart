@@ -141,6 +141,8 @@ class NetwrkApp extends ConsumerWidget {
             jobListingId: state.pathParameters['jobId']!,
             jobTitle: state.uri.queryParameters['title'] ?? '',
             businessName: state.uri.queryParameters['business'] ?? '',
+            description: state.uri.queryParameters['description'] ?? '',
+            requirements: state.uri.queryParameters['requirements'] ?? '',
           ),
         ),
         GoRoute(

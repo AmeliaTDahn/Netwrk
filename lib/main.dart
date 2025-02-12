@@ -6,6 +6,7 @@ import 'core/app.dart';
 import 'core/supabase_config.dart';
 import 'screens/connect/connection_requests_screen.dart';
 import 'package:go_router/go_router.dart';
+import 'services/skills_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,6 +33,18 @@ void main() async {
   } catch (e) {
     print('Error initializing Supabase: $e');
   }
+
+  // Force regenerate all embeddings with new context
+  print('Starting embedding generation...');
+  await SkillsService.forceRegenerateAllEmbeddings();
+  
+  // Test similarity queries
+  await SkillsService.testSimilarityQueries();
+  
+  // Add after forceRegenerateAllEmbeddings
+  await SkillsService.debugSkillSimilarity('Carpentry');
+  
+  print('Finished embedding generation');
 
   runApp(const ProviderScope(child: NetwrkApp()));
 }

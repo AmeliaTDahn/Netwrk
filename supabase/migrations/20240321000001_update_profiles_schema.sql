@@ -93,4 +93,30 @@ DROP TRIGGER IF EXISTS ensure_username_trigger ON profiles;
 CREATE TRIGGER ensure_username_trigger
 BEFORE INSERT ON profiles
 FOR EACH ROW
-EXECUTE FUNCTION generate_random_username(); 
+EXECUTE FUNCTION generate_random_username();
+
+-- Create a skills table
+create table if not exists public.skills (
+    id uuid default gen_random_uuid() primary key,
+    name text not null unique
+);
+
+-- Create a junction table for user skills
+create table if not exists public.profile_skills (
+    profile_id uuid references public.profiles(id) on delete cascade,
+    skill_id uuid references public.skills(id) on delete cascade,
+    primary key (profile_id, skill_id)
+);
+
+-- Add some common skills
+insert into public.skills (name) values
+    ('JavaScript'),
+    ('Python'),
+    ('React'),
+    ('Flutter'),
+    ('SQL'),
+    ('Java'),
+    ('C++'),
+    ('Project Management'),
+    ('UI/UX Design'),
+    ('Data Analysis'); 

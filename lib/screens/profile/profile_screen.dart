@@ -7,6 +7,9 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:url_launcher/url_launcher.dart';
 import '../saves/saves_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../components/banner_notification.dart';
+import '../../components/edit_skills_button.dart';
 
 // Add this enum at the top of the file
 enum UserRole {
@@ -44,10 +47,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   final _websiteController = TextEditingController();
 
   // Employee-specific fields
-  List<String> _skills = [];
   final _educationController = TextEditingController();
   final _experienceYearsController = TextEditingController();
-  final _newSkillController = TextEditingController();
 
   UserRole _userRole = UserRole.employee;
 
@@ -87,20 +88,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           _websiteController.text = data['website'] ?? '';
         } else {
           // Employee fields
-          // Convert skills to List<String> regardless of input type
-          if (data['skills'] != null) {
-            if (data['skills'] is List) {
-              _skills = List<String>.from(data['skills']);
-            } else if (data['skills'] is String) {
-              _skills = (data['skills'] as String)
-                  .split(',')
-                  .map((s) => s.trim())
-                  .where((s) => s.isNotEmpty)
-                  .toList();
-            }
-          } else {
-            _skills = [];
-          }
           _educationController.text = data['education'] ?? '';
           _experienceYearsController.text = (data['experience_years'] ?? '').toString();
         }
@@ -108,12 +95,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading profile: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        BannerNotification.show(context, 'Error loading profile: $e');
       }
     } finally {
       setState(() => _isLoading = false);
@@ -148,7 +130,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         });
       } else {
         profileData.addAll({
-          'skills': _skills,  // Store as array
           'education': _educationController.text,
           'experience_years': int.tryParse(_experienceYearsController.text) ?? 0,
         });
@@ -157,102 +138,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       await supabase.from('profiles').update(profileData).eq('id', userId);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Profile updated successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        setState(() => _isEditing = false);
+        setState(() {
+          _isEditing = false;
+          _isLoading = false;
+        });
+        BannerNotification.show(context, 'Profile updated successfully');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error updating profile: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        BannerNotification.show(context, 'Error updating profile: $e');
+        setState(() => _isLoading = false);
       }
-    } finally {
-      setState(() => _isLoading = false);
     }
-  }
-
-  void _addSkill(String skill) {
-    final trimmedSkill = skill.trim();
-    if (trimmedSkill.isNotEmpty && !_skills.contains(trimmedSkill)) {
-      setState(() {
-        _skills.add(trimmedSkill);
-      });
-      _newSkillController.clear();
-    }
-  }
-
-  Widget _buildSkillsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Skills',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        if (_isEditing) ...[
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ..._skills.map((skill) => Chip(
-                label: Text(skill),
-                deleteIcon: const Icon(Icons.close, size: 18),
-                backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
-                side: BorderSide(color: Theme.of(context).primaryColor),
-                onDeleted: () {
-                  setState(() {
-                    _skills.remove(skill);
-                  });
-                },
-              )),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _newSkillController,
-                  decoration: const InputDecoration(
-                    labelText: 'Add a skill',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.add),
-                    helperText: 'Press Enter or tap + to add a skill',
-                  ),
-                  onSubmitted: _addSkill,
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: const Icon(Icons.add_circle),
-                onPressed: () => _addSkill(_newSkillController.text),
-              ),
-            ],
-          ),
-        ] else ...[
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _skills.map((skill) => Chip(
-              label: Text(skill),
-              backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
-            )).toList(),
-          ),
-        ],
-      ],
-    );
   }
 
   Widget _buildProfileField(String label, String value) {
@@ -357,29 +254,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         setState(() => _photoUrl = photoUrl);
         
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Profile picture updated successfully'),
-              backgroundColor: Colors.green,
-            ),
-          );
+          BannerNotification.show(context, 'Profile picture updated successfully');
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(e.toString().replaceAll('Exception:', '').trim()),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 5),
-              action: SnackBarAction(
-                label: 'Dismiss',
-                onPressed: () {
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                },
-                textColor: Colors.white,
-              ),
-            ),
-          );
+          BannerNotification.show(context, e.toString().replaceAll('Exception:', '').trim());
         }
       } finally {
         setState(() => _isLoading = false);
@@ -569,8 +448,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
-                      _buildSkillsSection(),
-                      const SizedBox(height: 16),
                       _buildTextField(
                         controller: _educationController,
                         label: 'Education',
@@ -579,6 +456,84 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         controller: _experienceYearsController,
                         label: 'Years of Experience',
                         keyboardType: TextInputType.number,
+                      ),
+                    ],
+
+                    // Add skills section for employee accounts
+                    if (_accountType == 'employee') ...[
+                      const SizedBox(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Skills',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          EditSkillsButton(
+                            userId: supabase.auth.currentUser!.id,
+                            onSkillsUpdated: () {
+                              setState(() {
+                                // Trigger rebuild to refresh skills
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      FutureBuilder<List<Map<String, dynamic>>>(
+                        future: Future(() async {
+                          final response = await supabase
+                              .from('profile_skills')
+                              .select('skills(name)')
+                              .eq('profile_id', supabase.auth.currentUser!.id);
+                          return List<Map<String, dynamic>>.from(response);
+                        }),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) {
+                            return const SizedBox();
+                          }
+
+                          final skills = snapshot.data!
+                              .map((skill) => skill['skills']['name'] as String)
+                              .toList();
+
+                          if (skills.isEmpty) {
+                            return Text(
+                              'No skills added yet',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontStyle: FontStyle.italic,
+                              ),
+                            );
+                          }
+
+                          return Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: skills.map((skill) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2196F3), // The blue color from the screenshot
+                                  borderRadius: BorderRadius.circular(50), // Pill shape
+                                ),
+                                child: Text(
+                                  skill,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
                       ),
                     ],
                   ],
@@ -600,7 +555,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     _websiteController.dispose();
     _educationController.dispose();
     _experienceYearsController.dispose();
-    _newSkillController.dispose();
     super.dispose();
   }
 } 

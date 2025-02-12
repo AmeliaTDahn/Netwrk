@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../components/banner_notification.dart';
 
 class BusinessProfileScreen extends ConsumerStatefulWidget {
   final String? userId;
@@ -66,9 +67,7 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading profile: $e')),
-        );
+        BannerNotification.show(context, 'Error loading profile: $e');
       }
     }
   }
@@ -115,15 +114,11 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
           _isEditing = false;
           _isLoading = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Profile updated successfully')),
-        );
+        BannerNotification.show(context, 'Profile updated successfully');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating profile: $e')),
-        );
+        BannerNotification.show(context, 'Error updating profile: $e');
         setState(() => _isLoading = false);
       }
     }

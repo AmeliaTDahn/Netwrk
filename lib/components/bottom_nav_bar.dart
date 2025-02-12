@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/unread_messages_provider.dart';
+import '../providers/connection_requests_provider.dart';
 import '../core/supabase_config.dart';
 
 class BottomNavBar extends ConsumerWidget {
@@ -13,10 +14,50 @@ class BottomNavBar extends ConsumerWidget {
     required this.onTap,
   });
 
+  Widget _buildIconWithNotification({
+    required bool isActive,
+    required bool hasNotification,
+    required IconData activeIcon,
+    required IconData inactiveIcon,
+  }) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Icon(isActive ? activeIcon : inactiveIcon),
+        if (hasNotification)
+          Positioned(
+            right: -6,
+            top: -6,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2196F3),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white,
+                  width: 1.5,
+                ),
+              ),
+              constraints: const BoxConstraints(
+                minWidth: 12,
+                minHeight: 12,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasUnreadMessages = ref.watch(unreadMessagesProvider).when(
       data: (hasUnread) => hasUnread,
+      loading: () => false,
+      error: (_, __) => false,
+    );
+
+    final hasPendingConnections = ref.watch(hasConnectionRequestsProvider).when(
+      data: (hasPending) => hasPending,
       loading: () => false,
       error: (_, __) => false,
     );
@@ -43,9 +84,19 @@ class BottomNavBar extends ConsumerWidget {
           type: BottomNavigationBarType.fixed,
           items: isBusinessAccount
             ? [
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.people_outline),
-                  activeIcon: Icon(Icons.people),
+                BottomNavigationBarItem(
+                  icon: _buildIconWithNotification(
+                    isActive: false,
+                    hasNotification: hasPendingConnections,
+                    activeIcon: Icons.people,
+                    inactiveIcon: Icons.people_outline,
+                  ),
+                  activeIcon: _buildIconWithNotification(
+                    isActive: true,
+                    hasNotification: hasPendingConnections,
+                    activeIcon: Icons.people,
+                    inactiveIcon: Icons.people_outline,
+                  ),
                   label: 'Connect',
                 ),
                 const BottomNavigationBarItem(
@@ -54,49 +105,17 @@ class BottomNavBar extends ConsumerWidget {
                   label: 'Listings',
                 ),
                 BottomNavigationBarItem(
-                  icon: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      const Icon(Icons.chat_outlined),
-                      if (hasUnreadMessages)
-                        Positioned(
-                          right: -4,
-                          top: -4,
-                          child: Container(
-                            padding: const EdgeInsets.all(1),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).primaryColor,
-                              shape: BoxShape.circle,
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 8,
-                              minHeight: 8,
-                            ),
-                          ),
-                        ),
-                    ],
+                  icon: _buildIconWithNotification(
+                    isActive: false,
+                    hasNotification: hasUnreadMessages,
+                    activeIcon: Icons.chat,
+                    inactiveIcon: Icons.chat_outlined,
                   ),
-                  activeIcon: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      const Icon(Icons.chat),
-                      if (hasUnreadMessages)
-                        Positioned(
-                          right: -4,
-                          top: -4,
-                          child: Container(
-                            padding: const EdgeInsets.all(1),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).primaryColor,
-                              shape: BoxShape.circle,
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 8,
-                              minHeight: 8,
-                            ),
-                          ),
-                        ),
-                    ],
+                  activeIcon: _buildIconWithNotification(
+                    isActive: true,
+                    hasNotification: hasUnreadMessages,
+                    activeIcon: Icons.chat,
+                    inactiveIcon: Icons.chat_outlined,
                   ),
                   label: 'Messages',
                 ),
@@ -112,9 +131,19 @@ class BottomNavBar extends ConsumerWidget {
                   activeIcon: Icon(Icons.add_circle),
                   label: 'Create',
                 ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.people_outline),
-                  activeIcon: Icon(Icons.people),
+                BottomNavigationBarItem(
+                  icon: _buildIconWithNotification(
+                    isActive: false,
+                    hasNotification: hasPendingConnections,
+                    activeIcon: Icons.people,
+                    inactiveIcon: Icons.people_outline,
+                  ),
+                  activeIcon: _buildIconWithNotification(
+                    isActive: true,
+                    hasNotification: hasPendingConnections,
+                    activeIcon: Icons.people,
+                    inactiveIcon: Icons.people_outline,
+                  ),
                   label: 'Connect',
                 ),
                 const BottomNavigationBarItem(
@@ -123,49 +152,17 @@ class BottomNavBar extends ConsumerWidget {
                   label: 'Listings',
                 ),
                 BottomNavigationBarItem(
-                  icon: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      const Icon(Icons.chat_outlined),
-                      if (hasUnreadMessages)
-                        Positioned(
-                          right: -4,
-                          top: -4,
-                          child: Container(
-                            padding: const EdgeInsets.all(1),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).primaryColor,
-                              shape: BoxShape.circle,
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 8,
-                              minHeight: 8,
-                            ),
-                          ),
-                        ),
-                    ],
+                  icon: _buildIconWithNotification(
+                    isActive: false,
+                    hasNotification: hasUnreadMessages,
+                    activeIcon: Icons.chat,
+                    inactiveIcon: Icons.chat_outlined,
                   ),
-                  activeIcon: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      const Icon(Icons.chat),
-                      if (hasUnreadMessages)
-                        Positioned(
-                          right: -4,
-                          top: -4,
-                          child: Container(
-                            padding: const EdgeInsets.all(1),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).primaryColor,
-                              shape: BoxShape.circle,
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 8,
-                              minHeight: 8,
-                            ),
-                          ),
-                        ),
-                    ],
+                  activeIcon: _buildIconWithNotification(
+                    isActive: true,
+                    hasNotification: hasUnreadMessages,
+                    activeIcon: Icons.chat,
+                    inactiveIcon: Icons.chat_outlined,
                   ),
                   label: 'Messages',
                 ),

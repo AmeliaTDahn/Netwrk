@@ -823,6 +823,17 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                               fontWeight: FontWeight.bold,
                             ),
                           ),
+                          if (application['cover_note'] != null && 
+                              application['cover_note'].toString().isNotEmpty)
+                            Text(
+                              application['cover_note'],
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.8),
+                                fontSize: 11,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           Text(
                             '${profile['experience_years'] ?? 0} years experience',
                             style: const TextStyle(
@@ -1215,6 +1226,17 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (application['cover_note'] != null && 
+                            application['cover_note'].toString().isNotEmpty)
+                          Text(
+                            application['cover_note'],
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.8),
+                              fontSize: 11,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         if (profile['experience_years'] != null)
                           Text(
                             '${profile['experience_years']} yrs exp',

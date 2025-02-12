@@ -30,6 +30,11 @@ class VideoPlayerWidget extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+
+  // Add dispose method to be called externally
+  void dispose() {
+    // This is a stub that will be used by the state's dispose method
+  }
 }
 
 class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
@@ -70,8 +75,10 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
     if (widget.autoPlay != oldWidget.autoPlay) {
       if (widget.autoPlay) {
         _controller.play();
+        setState(() => _isPlaying = true);
       } else {
         _controller.pause();
+        setState(() => _isPlaying = false);
       }
     }
   }
@@ -101,13 +108,20 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
     try {
       await _controller.initialize();
       await _controller.setLooping(true);
+      _controller.addListener(_videoListener);
+      
       if (mounted) {
         setState(() {
           _isInitialized = true;
-          _isPlaying = widget.autoPlay;
         });
+        
+        // Always start playing if autoPlay is true
         if (widget.autoPlay) {
           _controller.play();
+          setState(() => _isPlaying = true);
+        } else {
+          _controller.pause();
+          setState(() => _isPlaying = false);
         }
       }
     } catch (e) {
@@ -207,6 +221,12 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   Widget build(BuildContext context) {
     if (!_isInitialized) {
       return const Center(child: CircularProgressIndicator());
+    }
+
+    // Start playing immediately if autoPlay is true
+    if (widget.autoPlay && !_isPlaying && _controller.value.isInitialized) {
+      _controller.play();
+      setState(() => _isPlaying = true);
     }
 
     return GestureDetector(

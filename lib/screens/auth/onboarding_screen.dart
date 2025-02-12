@@ -39,6 +39,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _educationController = TextEditingController();
   final _experienceYearsController = TextEditingController();
   
+  List<String> selectedSkills = [];
+  
   @override
   void initState() {
     super.initState();
@@ -128,6 +130,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  Future<void> _saveSkills(String profileId) async {
+    try {
+      // Get all skills to map names to IDs
+      final skillsResponse = await supabase
+          .from('skills')
+          .select()
+          .in_('name', _skills);
+      
+      final skills = List<Map<String, dynamic>>.from(skillsResponse);
+      
+      // Create profile_skills entries
+      final skillsToAdd = skills.map((skill) => {
+        'profile_id': profileId,
+        'skill_id': skill['id'],
+      }).toList();
+
+      if (skillsToAdd.isNotEmpty) {
+        await supabase.from('profile_skills').upsert(skillsToAdd);
+      }
+    } catch (e) {
+      print('Error saving skills: $e');
+    }
+  }
+
   Future<void> _submitProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -188,6 +214,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       }
 
       await supabase.from('profiles').upsert(profileData);
+      
+      // Save skills if this is an employee profile
+      if (_accountType == 'employee') {
+        await _saveSkills(userId);
+      }
 
       if (mounted) {
         context.go('/');
@@ -474,8 +505,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               label: 'Website',
             ),
           ] else ...[
+            const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.grey.shade300),
                 borderRadius: BorderRadius.circular(12),
@@ -483,21 +515,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.only(left: 12, top: 8),
-                    child: Text(
-                      'Skills',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 12,
-                      ),
+                  Text(
+                    'Skills',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey[600],
                     ),
                   ),
+                  const SizedBox(height: 8),
                   SkillsInput(
-                    skills: _skills,
-                    onChanged: (newSkills) {
-                      setState(() => _skills = newSkills);
-                    },
+                    selectedSkills: _skills,
+                    onChanged: (skills) => setState(() => _skills = skills),
                   ),
                 ],
               ),

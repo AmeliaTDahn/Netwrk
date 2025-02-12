@@ -7,17 +7,22 @@ import 'package:video_compress/video_compress.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/supabase_config.dart';
 import 'dart:io';
+import '../../components/ai_recommendations_card.dart';
 
 class SubmitApplicationScreen extends StatefulWidget {
   final String jobListingId;
   final String jobTitle;
   final String businessName;
+  final String description;
+  final String requirements;
 
   const SubmitApplicationScreen({
     super.key,
     required this.jobListingId,
     required this.jobTitle,
     required this.businessName,
+    required this.description,
+    required this.requirements,
   });
 
   @override
@@ -105,14 +110,77 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
   }
 
   Future<void> _pickVideo() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? video = await picker.pickVideo(
-      source: ImageSource.gallery,
-      maxDuration: const Duration(minutes: 5),
-    );
-
-    if (video != null) {
-      await _processVideo(File(video.path));
+    if (_isLoading) return;
+    
+    try {
+      setState(() => _isLoading = true);
+      
+      // 1. Clean up existing resources first
+      if (_videoController != null) {
+        await _videoController!.dispose();
+        _videoController = null;
+      }
+      _videoFile = null;
+      
+      // 2. Create picker instance
+      final ImagePicker picker = ImagePicker();
+      
+      // 3. Pick video with size constraints
+      final XFile? pickedVideo = await picker.pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(minutes: 5),
+      );
+      
+      // Handle case where user cancels selection
+      if (pickedVideo == null) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+      
+      // 4. Validate file exists and check size
+      final File videoFile = File(pickedVideo.path);
+      if (!await videoFile.exists()) {
+        throw Exception('Selected video file does not exist');
+      }
+      
+      final int fileSize = await videoFile.length();
+      const int maxFileSize = 100 * 1024 * 1024; // 100 MB
+      
+      if (fileSize > maxFileSize) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please select a video under 100 MB'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
+      
+      // 5. Process the video
+      await VideoCompress.deleteAllCache();
+      await _processVideo(videoFile);
+      
+    } catch (e, stackTrace) {
+      print('Error picking video: $e');
+      print('Stack trace: $stackTrace');
+      
+      // Clean up resources
+      _videoController?.dispose();
+      _videoFile = null;
+      await VideoCompress.deleteAllCache();
+      
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not load video: ${e.toString().split('\n')[0]}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -138,30 +206,57 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
   }
 
   Future<void> _processVideo(File videoFile) async {
-    setState(() => _isLoading = true);
-
+    print('DEBUG: Starting _processVideo');
+    print('DEBUG: Input video path: ${videoFile.path}');
+    
+    if (mounted) setState(() => _isLoading = true);
+    
     try {
-      // Compress video
+      // Clear any existing compressed files
+      await VideoCompress.deleteAllCache();
+      
+      print('DEBUG: Starting video compression');
       final MediaInfo? compressedVideo = await VideoCompress.compressVideo(
         videoFile.path,
         quality: VideoQuality.MediumQuality,
         deleteOrigin: false,
+        includeAudio: true,
+        frameRate: 24,
       );
-
-      if (compressedVideo?.file != null) {
-        setState(() {
-          _videoFile = compressedVideo!.file!;
-          _initializeVideoPlayer();
-        });
+      
+      if (compressedVideo?.file == null) {
+        throw Exception('Failed to compress video');
       }
-    } catch (e) {
+      
+      print('DEBUG: Compression complete. Original size: ${videoFile.lengthSync() / 1024 / 1024} MB');
+      print('DEBUG: Compressed size: ${compressedVideo!.file!.lengthSync() / 1024 / 1024} MB');
+      
+      if (mounted) {
+        setState(() {
+          _videoFile = compressedVideo.file!;
+        });
+        await _initializeVideoPlayer();
+      }
+      
+    } catch (e, stackTrace) {
+      print('DEBUG: Error in _processVideo: $e');
+      print('DEBUG: Stack trace: $stackTrace');
+      
+      // Clean up resources
+      await VideoCompress.cancelCompression();
+      await VideoCompress.deleteAllCache();
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error processing video: $e')),
+          SnackBar(
+            content: Text('Error processing video: ${e.toString().split('\n')[0]}'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
+      print('DEBUG: _processVideo completed');
     }
   }
 
@@ -175,12 +270,31 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
   }
 
   Future<void> _initializeVideoPlayer() async {
+    print('DEBUG: Starting _initializeVideoPlayer');
     if (_videoFile != null) {
+      print('DEBUG: Video file exists at path: ${_videoFile!.path}');
       _videoController?.dispose();
       _videoController = VideoPlayerController.file(_videoFile!);
-      await _videoController!.initialize();
-      await _videoController!.setLooping(true);
-      if (mounted) setState(() {});
+      try {
+        print('DEBUG: Initializing video controller');
+        await _videoController!.initialize();
+        print('DEBUG: Setting video to loop');
+        await _videoController!.setLooping(true);
+        if (mounted) {
+          setState(() {});
+          print('DEBUG: Video player initialized successfully');
+        }
+      } catch (e, stackTrace) {
+        print('DEBUG: Error initializing video player: $e');
+        print('DEBUG: Stack trace: $stackTrace');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error initializing video player: $e')),
+          );
+        }
+      }
+    } else {
+      print('DEBUG: No video file to initialize');
     }
   }
 
@@ -321,6 +435,12 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: Colors.grey[600],
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  AIRecommendationsCard(
+                    jobTitle: widget.jobTitle,
+                    description: widget.description,
+                    requirements: widget.requirements,
                   ),
                   const SizedBox(height: 24),
                   if (_videoFile == null) ...[

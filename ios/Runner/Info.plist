@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Access to photo library is required to select videos for job applications</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Access to camera is required to record videos for job applications</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Access to microphone is required to record videos with audio for job applications</string>
 </dict>
 </plist>

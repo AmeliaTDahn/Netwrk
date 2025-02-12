@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:go_router/go_router.dart';
 import '../messages/chat_screen.dart';
 import '../../components/banner_notification.dart';
+import '../../providers/connection_requests_provider.dart';
 
 const Color primaryBlue = Color(0xFF2196F3);    // Light blue
 const Color secondaryBlue = Color(0xFF1565C0);  // Dark blue
@@ -209,11 +210,18 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
 
   @override
   Widget build(BuildContext context) {
+    final pendingRequestsCount = ref.watch(connectionRequestsCountProvider).when(
+      data: (count) => count,
+      loading: () => 0,
+      error: (_, __) => 0,
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Connect'),
         actions: [
           Stack(
+            clipBehavior: Clip.none,
             children: [
               IconButton(
                 icon: const Icon(Icons.notifications),
@@ -225,25 +233,30 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
                   });
                 },
               ),
-              if (_incomingRequestsCount > 0)
+              if (pendingRequestsCount > 0)
                 Positioned(
                   right: 8,
                   top: 8,
                   child: Container(
-                    padding: const EdgeInsets.all(2),
+                    padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(10),
+                      color: const Color(0xFF2196F3),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white,
+                        width: 1.5,
+                      ),
                     ),
                     constraints: const BoxConstraints(
-                      minWidth: 16,
-                      minHeight: 16,
+                      minWidth: 12,
+                      minHeight: 12,
                     ),
                     child: Text(
-                      _incomingRequestsCount.toString(),
+                      pendingRequestsCount.toString(),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 10,
+                        fontWeight: FontWeight.bold,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -671,36 +684,79 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
   }
 
   Widget _buildUserCard(Map<String, dynamic> user, {required Widget actionButton}) {
-    // Add debug print to see the user data
-    print('Building card for user: $user');
-    
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: ListTile(
-        leading: GestureDetector(
-          onTap: () => _navigateToProfile(user['id'], user['account_type']),
-          child: CircleAvatar(
-            backgroundImage: user['photo_url'] != null
-                ? NetworkImage(user['photo_url'])
-                : null,
-            child: user['photo_url'] == null
-                ? const Icon(Icons.person)
-                : null,
-          ),
-        ),
-        title: GestureDetector(
-          onTap: () => _navigateToProfile(user['id'], user['account_type']),
-          child: Text(
-            user['display_name'] ?? user['username'] ?? 'User',
-            style: const TextStyle(
-              fontWeight: FontWeight.w500,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: GestureDetector(
+              onTap: () => _navigateToProfile(user['id'], user['account_type']),
+              child: CircleAvatar(
+                backgroundImage: user['photo_url'] != null
+                    ? NetworkImage(user['photo_url'])
+                    : null,
+                child: user['photo_url'] == null
+                    ? const Icon(Icons.person)
+                    : null,
+              ),
             ),
+            title: GestureDetector(
+              onTap: () => _navigateToProfile(user['id'], user['account_type']),
+              child: Text(
+                user['display_name'] ?? user['username'] ?? 'User',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            subtitle: Text(
+              user['account_type'] == 'business' ? 'Business' : 'Employee'
+            ),
+            trailing: actionButton,
           ),
-        ),
-        subtitle: Text(
-          user['account_type'] == 'business' ? 'Business' : 'Employee'
-        ),
-        trailing: actionButton,
+          if (user['account_type'] == 'employee')
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: Future(() async {
+                  final response = await supabase
+                      .from('profile_skills')
+                      .select('skills(name)')
+                      .eq('profile_id', user['id']);
+                  return List<Map<String, dynamic>>.from(response);
+                }),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const SizedBox();
+                  }
+
+                  final skills = snapshot.data!
+                      .map((skill) => skill['skills']['name'] as String)
+                      .toList();
+
+                  if (skills.isEmpty) {
+                    return const SizedBox();
+                  }
+
+                  return Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: skills.map((skill) {
+                      return Chip(
+                        label: Text(
+                          skill,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                        padding: const EdgeInsets.all(4),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+            ),
+        ],
       ),
     );
   }

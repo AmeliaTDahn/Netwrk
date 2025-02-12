@@ -578,7 +578,7 @@ class _JobListingsBrowseScreenState extends State<JobListingsBrowseScreen> {
                         onPressed: () {
                           Navigator.pop(context); // Close the bottom sheet
                           context.push(
-                            '/submit-application/${listing['id']}?title=${Uri.encodeComponent(listing['title'])}&business=${Uri.encodeComponent(business['business_name'] ?? 'Unknown Business')}',
+                            '/submit-application/${listing['id']}?title=${Uri.encodeComponent(listing['title'])}&business=${Uri.encodeComponent(business['business_name'] ?? 'Unknown Business')}&description=${Uri.encodeComponent(listing['description'] ?? '')}&requirements=${Uri.encodeComponent(listing['requirements'] ?? '')}',
                           );
                         },
                         style: ElevatedButton.styleFrom(
