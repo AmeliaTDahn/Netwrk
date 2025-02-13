@@ -67,4 +67,126 @@ class AIService {
       throw Exception('Error getting AI recommendations: $e');
     }
   }
+
+  static Future<List<String>> generateVideoApplicationTips({
+    required String jobTitle,
+    required String description,
+    required String requirements,
+    required Map<String, dynamic> userProfile,
+  }) async {
+    try {
+      // Extract and format user profile information in detail
+      final userSkills = List<String>.from(userProfile['skills'] ?? []);
+      final userExperience = List<Map<String, dynamic>>.from(userProfile['experience'] ?? []);
+      final userEducation = List<Map<String, dynamic>>.from(userProfile['education'] ?? []);
+
+      // Format experience details
+      final formattedExperience = userExperience.map((exp) => '''
+        Company: ${exp['company']}
+        Role: ${exp['role']}
+        Description: ${exp['description']}
+      ''').join('\n');
+
+      // Format education details
+      final formattedEducation = userEducation.map((edu) => '''
+        Institution: ${edu['institution']}
+        Degree: ${edu['degree']}
+        Field: ${edu['field_of_study']}
+      ''').join('\n');
+      
+      final prompt = '''
+You are creating personalized video application tips for a specific candidate applying to a specific job.
+ONLY suggest highlighting experiences and skills that are explicitly listed in the candidate's profile.
+DO NOT make assumptions about experiences they might have - stick to their actual background.
+
+Job Details:
+Title: $jobTitle
+
+Description:
+$description
+
+Requirements:
+$requirements
+
+Candidate's Detailed Profile:
+
+Skills They Have:
+${userSkills.join(', ')}
+
+Their Work Experience:
+$formattedExperience
+
+Their Education:
+$formattedEducation
+
+Instructions:
+1. ONLY reference skills, experiences, and qualifications that are explicitly listed above
+2. DO NOT suggest highlighting experience they don't have
+3. Make specific connections between their ACTUAL experience and the job requirements
+4. If there's a gap between requirements and their experience, focus on transferable skills they DO have
+
+Generate 3 sections:
+
+1. "Your Relevant Experience:"
+ONLY mention experience they actually have that relates to this role.
+Reference specific companies and roles from their profile.
+
+2. "Your Matching Skills:"
+ONLY list skills they actually have that match the job requirements.
+Explain how they gained these skills based on their listed experience.
+
+3. "Your Unique Background:"
+Focus on their actual education and experience that makes them stand out.
+Make specific connections to the job requirements.
+
+Format: Return exactly 3 sections, each with a header followed by a colon and detailed explanation.
+Every suggestion must be based on their actual profile data - no assumptions.
+''';
+
+      final response = await http.post(
+        Uri.parse('https://api.openai.com/v1/chat/completions'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${EnvConfig.openAiKey}',
+        },
+        body: jsonEncode({
+          'model': 'gpt-4-turbo-preview',
+          'messages': [
+            {
+              'role': 'system',
+              'content': '''You are a precise career coach who only makes recommendations based on verified information.
+Never suggest highlighting experience the candidate doesn't have.
+Only reference skills and experiences explicitly listed in their profile.
+If there's a mismatch between requirements and their experience, focus on transferable skills they actually possess.
+Be specific and reference actual companies, roles, and experiences from their profile.''',
+            },
+            {
+              'role': 'user',
+              'content': prompt,
+            },
+          ],
+          'temperature': 0.5, // Lower temperature for more focused responses
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to generate tips: ${response.body}');
+      }
+
+      final data = jsonDecode(response.body);
+      final content = data['choices'][0]['message']['content'] as String;
+      
+      // Split the content into sections and clean up
+      final sections = content
+          .split('\n')
+          .where((line) => line.trim().isNotEmpty)
+          .map((line) => line.trim())
+          .toList();
+
+      return sections;
+    } catch (e) {
+      print('Error generating video tips: $e');
+      rethrow;
+    }
+  }
 } 

@@ -10,6 +10,7 @@ import '../saves/saves_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../components/banner_notification.dart';
 import '../../components/edit_skills_button.dart';
+import '../../components/experience_input.dart';
 
 // Add this enum at the top of the file
 enum UserRole {
@@ -520,8 +521,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                   vertical: 12,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF2196F3), // The blue color from the screenshot
-                                  borderRadius: BorderRadius.circular(50), // Pill shape
+                                  color: const Color(0xFF2196F3),
+                                  borderRadius: BorderRadius.circular(50),
                                 ),
                                 child: Text(
                                   skill,
@@ -534,6 +535,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             }).toList(),
                           );
                         },
+                      ),
+                      // Add Experience section
+                      const SizedBox(height: 32),
+                      ExperienceInput(
+                        enabled: _isEditing,
                       ),
                     ],
                   ],

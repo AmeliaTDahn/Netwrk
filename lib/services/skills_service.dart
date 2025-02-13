@@ -18,26 +18,25 @@ class SkillsService {
   }
 
   // Get embedding using OpenAI's text-embedding-3-small model
-  static Future<List<double>> _getEmbedding(String skillName, String category) async {
+  static Future<List<double>> _getEmbedding(String skillName) async {
     try {
       final context = '''
       Skill Analysis:
       Name: $skillName
-      Category: $category
-      Professional Context: This is a professional skill in the $category field.
-      When someone has this skill, they typically also have related skills in the same or complementary fields.
-      For example, someone with this $category skill might also have experience with other $category skills or related professional capabilities.
+      Professional Context: This is a professional skill.
+      When someone has this skill, they typically also have related skills in similar or complementary fields.
       
-      Question: What other professional skills in the $category field or related fields are commonly used together with $skillName?
+      Question: What other professional skills are commonly used together with $skillName?
       ''';
 
       print('=== Getting Embedding ===');
       print('Skill: $skillName');
-      print('Category: $category');
       print('API Key length: ${_openaiApiKey.length}');
+      print('API Key starts with: ${_openaiApiKey.substring(0, 10)}...');
+      print('Using model: text-embedding-3-small');
 
       final response = await http.post(
-        Uri.parse('https://api.openai.com/v1/embeddings'),
+        Uri.parse(_openaiApiUrl),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${_openaiApiKey}',
@@ -50,9 +49,12 @@ class SkillsService {
       );
 
       print('Response status: ${response.statusCode}');
+      print('Response headers: ${response.headers}');
+      print('Full response body: ${response.body}');
+      
       if (response.statusCode != 200) {
         print('Error response: ${response.body}');
-        throw Exception('Failed to get embedding: ${response.statusCode}');
+        throw Exception('Failed to get embedding: ${response.statusCode}\nResponse: ${response.body}');
       }
 
       final data = jsonDecode(response.body);
@@ -76,10 +78,10 @@ class SkillsService {
   }
 
   // Update skill embedding in the database
-  static Future<void> updateSkillEmbedding(int skillId, String skillName, String category) async {
+  static Future<void> updateSkillEmbedding(int skillId, String skillName) async {
     try {
       print('Starting embedding update for $skillName...');
-      final embedding = await _getEmbedding(skillName, category);
+      final embedding = await _getEmbedding(skillName);
       
       // Verify embedding is not all zeros
       bool allZeros = embedding.every((value) => value == 0);
@@ -113,7 +115,7 @@ class SkillsService {
     try {
       final skills = await supabase
           .from('skills')
-          .select('id, name, category');
+          .select('id, name');
 
       print('Updating embeddings for ${skills.length} skills');
 
@@ -122,7 +124,6 @@ class SkillsService {
           await updateSkillEmbedding(
             skill['id'] as int,
             skill['name'] as String,
-            skill['category'] as String,
           );
           print('Updated embedding for: ${skill['name']}');
           await Future.delayed(const Duration(milliseconds: 200));
@@ -176,7 +177,6 @@ class SkillsService {
         print('''
 Suggestion details:
 - Suggested skill: ${row['skill_name']}
-- Category: ${row['category']}
 - Similarity score: ${row['similarity']}
 - Based on user's skill: ${row['based_on']}
 ''');
@@ -198,21 +198,54 @@ Suggestion details:
   // When adding a new custom skill
   static Future<void> addNewSkill(String skillName) async {
     try {
-      // First insert the skill
-      final response = await supabase
-          .from('skills')
-          .insert({'name': skillName})
-          .select()
-          .single();
+      print('=== ADD NEW SKILL START ===');
+      print('1. Starting to add skill: $skillName');
       
-      // Then generate and update its embedding
-      await updateSkillEmbedding(
-        response['id'] as int,
-        skillName,
-        response['category'] as String,
-      );
-    } catch (e) {
-      print('Error adding new skill: $e');
+      // First check if skill already exists
+      final existingSkill = await supabase
+          .from('skills')
+          .select()
+          .eq('name', skillName)
+          .maybeSingle();
+          
+      if (existingSkill != null) {
+        print('Skill already exists');
+        return; // Skill already exists, no need to add
+      }
+      
+      // Generate embedding first
+      print('2. Generating embedding...');
+      final embedding = await _getEmbedding(skillName);
+      
+      // Validate embedding
+      if (embedding.isEmpty || embedding.length != 1536) {
+        throw Exception('Invalid embedding generated: length ${embedding.length}, expected 1536');
+      }
+      
+      print('3. Embedding generated successfully');
+      print('4. Embedding length: ${embedding.length}');
+      
+      // Convert embedding to Postgres vector format
+      // Format: [x1,x2,x3,...] - PostgreSQL vector syntax requires square brackets
+      final vectorString = '[${embedding.join(',')}]';
+      print('5. Converted embedding to vector string');
+      
+      // Insert skill with embedding using RPC function
+      print('6. Inserting skill with embedding...');
+      final response = await supabase
+          .rpc('insert_skill_with_embedding',
+              params: {
+                'skill_name': skillName,
+                'embedding_vector': vectorString
+              });
+      
+      print('7. Successfully inserted skill with embedding');
+      print('=== ADD NEW SKILL COMPLETE ===');
+    } catch (e, stackTrace) {
+      print('ERROR in addNewSkill:');
+      print('Error details: $e');
+      print('Stack trace: $stackTrace');
+      rethrow;
     }
   }
 
@@ -246,21 +279,25 @@ Suggestion details:
       print('Step 2: Getting all skills...');
       final skills = await supabase
           .from('skills')
-          .select('id, name, category');
+          .select('id, name');
       
       print('Found ${skills.length} skills to update');
       
       for (final skill in skills) {
-        print('Processing skill: ${skill['name']} (${skill['category']})');
+        print('Processing skill: ${skill['name']}');
         try {
           print('Getting embedding...');
-          final embedding = await _getEmbedding(skill['name'], skill['category']);
+          final embedding = await _getEmbedding(skill['name']);
           print('Got embedding, updating database...');
           
+          // Convert embedding to Postgres vector format and use RPC function
+          final vectorString = embedding.join(',');
           await supabase
-              .from('skills')
-              .update({'embedding': embedding})
-              .eq('id', skill['id']);
+              .rpc('update_skill_embedding', 
+                  params: {
+                    'skill_id': skill['id'],
+                    'embedding_vector': vectorString
+                  });
           
           print('Successfully updated embedding for: ${skill['name']}');
           await Future.delayed(const Duration(milliseconds: 200));
@@ -282,7 +319,7 @@ Suggestion details:
       // Get a test skill (Python)
       final pythonSkill = await supabase
           .from('skills')
-          .select('id, name, category, embedding')
+          .select('id, name, embedding')
           .eq('name', 'Python')
           .single();
       
@@ -299,7 +336,7 @@ Suggestion details:
       
       print('\nSimilar skills to Python:');
       for (var skill in similarSkills) {
-        print('- ${skill['name']} (${skill['category']}) - similarity: ${skill['similarity']}');
+        print('- ${skill['name']} - similarity: ${skill['similarity']}');
       }
       
     } catch (e) {
@@ -314,7 +351,7 @@ Suggestion details:
       // Get the skill's embedding
       final skill = await supabase
           .from('skills')
-          .select('id, name, category, embedding')
+          .select('id, name, embedding')
           .eq('name', skillName)
           .single();
           
@@ -327,10 +364,64 @@ Suggestion details:
               
       print('\nSimilar skills to $skillName:');
       for (var row in similar) {
-        print('- ${row['similar_skill']} (${row['category']}) - similarity: ${row['similarity']}');
+        print('- ${row['similar_skill']} - similarity: ${row['similarity']}');
       }
     } catch (e) {
       print('Error in debug: $e');
+    }
+  }
+
+  // Add this method to generate embeddings for skills that don't have them
+  static Future<void> generateEmbeddingsForSkillsWithoutEmbeddings() async {
+    try {
+      print('Starting to generate embeddings for skills without embeddings...');
+      
+      // Get all skills that don't have embeddings
+      final response = await supabase
+          .from('skills')
+          .select('id, name')
+          .is_('embedding', null);
+          
+      final skills = List<Map<String, dynamic>>.from(response);
+      print('Found ${skills.length} skills without embeddings');
+      
+      for (final skill in skills) {
+        try {
+          print('Generating embedding for: ${skill['name']}');
+          
+          // Generate embedding
+          final embedding = await _getEmbedding(skill['name']);
+          
+          // Validate embedding
+          if (embedding.isEmpty || embedding.length != 1536) {
+            print('Invalid embedding generated for ${skill['name']}: length ${embedding.length}');
+            continue;
+          }
+          
+          // Convert to vector format
+          final vectorString = '[${embedding.join(',')}]';
+          
+          // Update the skill with the embedding
+          await supabase
+              .rpc('update_skill_embedding',
+                  params: {
+                    'skill_id': skill['id'],
+                    'embedding_vector': vectorString
+                  });
+          
+          print('Successfully updated embedding for: ${skill['name']}');
+          
+          // Add a small delay to avoid rate limiting
+          await Future.delayed(const Duration(milliseconds: 200));
+        } catch (e) {
+          print('Error generating embedding for ${skill['name']}: $e');
+        }
+      }
+      
+      print('Finished generating embeddings');
+    } catch (e) {
+      print('Error in generateEmbeddingsForSkillsWithoutEmbeddings: $e');
+      rethrow;
     }
   }
 } 
