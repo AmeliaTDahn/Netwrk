@@ -686,77 +686,31 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> with SingleTicker
   Widget _buildUserCard(Map<String, dynamic> user, {required Widget actionButton}) {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: GestureDetector(
-              onTap: () => _navigateToProfile(user['id'], user['account_type']),
-              child: CircleAvatar(
-                backgroundImage: user['photo_url'] != null
-                    ? NetworkImage(user['photo_url'])
-                    : null,
-                child: user['photo_url'] == null
-                    ? const Icon(Icons.person)
-                    : null,
-              ),
-            ),
-            title: GestureDetector(
-              onTap: () => _navigateToProfile(user['id'], user['account_type']),
-              child: Text(
-                user['display_name'] ?? user['username'] ?? 'User',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            subtitle: Text(
-              user['account_type'] == 'business' ? 'Business' : 'Employee'
-            ),
-            trailing: actionButton,
+      child: ListTile(
+        leading: GestureDetector(
+          onTap: () => _navigateToProfile(user['id'], user['account_type']),
+          child: CircleAvatar(
+            backgroundImage: user['photo_url'] != null
+                ? NetworkImage(user['photo_url'])
+                : null,
+            child: user['photo_url'] == null
+                ? const Icon(Icons.person)
+                : null,
           ),
-          if (user['account_type'] == 'employee')
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: FutureBuilder<List<Map<String, dynamic>>>(
-                future: Future(() async {
-                  final response = await supabase
-                      .from('profile_skills')
-                      .select('skills(name)')
-                      .eq('profile_id', user['id']);
-                  return List<Map<String, dynamic>>.from(response);
-                }),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const SizedBox();
-                  }
-
-                  final skills = snapshot.data!
-                      .map((skill) => skill['skills']['name'] as String)
-                      .toList();
-
-                  if (skills.isEmpty) {
-                    return const SizedBox();
-                  }
-
-                  return Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: skills.map((skill) {
-                      return Chip(
-                        label: Text(
-                          skill,
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
-                        padding: const EdgeInsets.all(4),
-                      );
-                    }).toList(),
-                  );
-                },
-              ),
+        ),
+        title: GestureDetector(
+          onTap: () => _navigateToProfile(user['id'], user['account_type']),
+          child: Text(
+            user['display_name'] ?? user['username'] ?? 'User',
+            style: const TextStyle(
+              fontWeight: FontWeight.w500,
             ),
-        ],
+          ),
+        ),
+        subtitle: Text(
+          user['account_type'] == 'business' ? 'Business' : 'Employee'
+        ),
+        trailing: actionButton,
       ),
     );
   }

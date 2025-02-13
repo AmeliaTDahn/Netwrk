@@ -844,6 +844,14 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                         ],
                       ),
                     ),
+                    // Add Transcription Button
+                    if (application['status'] != 'pending' && 
+                        application['job_listings']['profiles']['account_type'] == 'business')
+                      _buildActionButton(
+                        icon: Icons.description,
+                        label: 'Transcription',
+                        onTap: () => _showTranscription(application['id']),
+                      ),
                   ],
                 ),
                 if (skills != null && skills.isNotEmpty) ...[
@@ -1707,6 +1715,72 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
     _nextVideoController?.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  Widget _buildApplicationCard(Map<String, dynamic> application) {
+    return Card(
+      margin: const EdgeInsets.all(8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ... existing application card content ...
+          
+          // Add Transcription Button
+          if (application['status'] != 'pending' && 
+              application['job_listings']['profiles']['account_type'] == 'business')
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: ElevatedButton.icon(
+                onPressed: () => _showTranscription(application['id']),
+                icon: const Icon(Icons.description),
+                label: const Text('View Transcription'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showTranscription(String applicationId) async {
+    try {
+      // Fetch transcription from Supabase
+      final transcriptionData = await supabase
+          .from('video_transcriptions')
+          .select('transcription')
+          .eq('application_id', applicationId)
+          .single();
+
+      if (!mounted) return;
+
+      // Show transcription in dialog
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Video Transcription'),
+          content: SingleChildScrollView(
+            child: Text(
+              transcriptionData['transcription'] ?? 'No transcription available',
+              style: const TextStyle(fontSize: 14),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      print('Error fetching transcription: $e');
+      if (mounted) {
+        _showNotification('Error loading transcription', isSuccess: false);
+      }
+    }
   }
 }
 

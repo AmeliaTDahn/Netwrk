@@ -30,7 +30,7 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
     try {
       setState(() => _isLoadingTips = true);
 
-      // Fetch user's profile data
+      // Fetch user's complete profile data
       final userId = supabase.auth.currentUser!.id;
       final profileResponse = await supabase
           .from('profiles')
@@ -41,10 +41,14 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
                 name
               )
             ),
-            experience:profile_experience (
+            profile_experience (
+              id,
               company,
               role,
-              description
+              description,
+              start_date,
+              end_date,
+              is_current
             ),
             education:profile_education (
               institution,
@@ -57,11 +61,22 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
 
       // Transform profile data for AI service
       final userProfile = {
+        'name': profileResponse['name'],
         'skills': profileResponse['profile_skills']
             ?.map((s) => s['skills']['name'])
             .toList() ?? [],
-        'experience': profileResponse['experience'] ?? [],
+        'experience': (profileResponse['profile_experience'] as List<dynamic>)
+            .map((e) => {
+                  'company': e['company'],
+                  'role': e['role'],
+                  'description': e['description'],
+                  'start_date': e['start_date'],
+                  'end_date': e['end_date'],
+                  'is_current': e['is_current'],
+                })
+            .toList(),
         'education': profileResponse['education'] ?? [],
+        'years_of_experience': profileResponse['experience_years'],
       };
 
       // Generate personalized tips

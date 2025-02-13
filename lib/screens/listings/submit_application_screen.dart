@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/supabase_config.dart';
 import 'dart:io';
 import '../../components/ai_recommendations_card.dart';
+import '../../services/ai_service.dart';
 
 class SubmitApplicationScreen extends StatefulWidget {
   final String jobListingId;
@@ -369,14 +370,27 @@ class _SubmitApplicationScreenState extends State<SubmitApplicationScreen> {
       }
 
       // Create application record
-      await supabase.from('job_applications').insert({
+      final applicationResponse = await supabase.from('job_applications').insert({
         'job_listing_id': widget.jobListingId,
         'applicant_id': userId,
         'video_url': videoUrl,
         'resume_url': resumeUrl,
         'cover_note': _coverNoteController.text,
         'status': 'pending',
-      });
+      }).select().single();
+
+      // Start transcription process
+      try {
+        await AIService.transcribeAndStoreVideoApplication(
+          videoPath: _videoFile!.path,
+          applicationId: applicationResponse['id'],
+          listingId: widget.jobListingId,
+          userId: userId,
+        );
+      } catch (transcriptionError) {
+        print('Error during transcription: $transcriptionError');
+        // Don't block the application submission if transcription fails
+      }
 
       if (mounted) {
         Navigator.pop(context);

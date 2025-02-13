@@ -1,9 +1,15 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import '../core/env_config.dart';
+import '../core/supabase_client.dart';
+import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter/return_code.dart';
 
 class AIService {
   static const String _baseUrl = 'https://api.openai.com/v1/chat/completions';
+  static const String _whisperUrl = 'https://api.openai.com/v1/audio/transcriptions';
   
   static Future<String> getVideoApplicationStrategy({
     required String jobTitle,
@@ -76,16 +82,28 @@ class AIService {
   }) async {
     try {
       // Extract and format user profile information in detail
+      final userName = userProfile['name'] as String?;
       final userSkills = List<String>.from(userProfile['skills'] ?? []);
       final userExperience = List<Map<String, dynamic>>.from(userProfile['experience'] ?? []);
       final userEducation = List<Map<String, dynamic>>.from(userProfile['education'] ?? []);
+      final yearsOfExperience = userProfile['years_of_experience'];
 
-      // Format experience details
-      final formattedExperience = userExperience.map((exp) => '''
-        Company: ${exp['company']}
-        Role: ${exp['role']}
-        Description: ${exp['description']}
-      ''').join('\n');
+      // Format experience details with dates and descriptions
+      final formattedExperience = userExperience.map((exp) {
+        final startDate = DateTime.parse(exp['start_date']).year.toString();
+        final endDate = exp['is_current'] 
+            ? 'Present'
+            : exp['end_date'] != null 
+                ? DateTime.parse(exp['end_date']).year.toString()
+                : 'Present';
+        
+        return '''
+          Company: ${exp['company']}
+          Role: ${exp['role']}
+          Period: $startDate - $endDate
+          Description: ${exp['description']}
+        ''';
+      }).join('\n\n');
 
       // Format education details
       final formattedEducation = userEducation.map((edu) => '''
@@ -93,11 +111,13 @@ class AIService {
         Degree: ${edu['degree']}
         Field: ${edu['field_of_study']}
       ''').join('\n');
-      
+
       final prompt = '''
-You are creating personalized video application tips for a specific candidate applying to a specific job.
-ONLY suggest highlighting experiences and skills that are explicitly listed in the candidate's profile.
-DO NOT make assumptions about experiences they might have - stick to their actual background.
+You are creating highly personalized video application tips for ${userName ?? 'a candidate'} applying to a specific job.
+Your task is to analyze the candidate's actual experience and match it against the job requirements.
+CRITICAL: You must ONLY suggest demonstrating skills and experiences that are EXPLICITLY listed in the candidate's profile.
+Even if a skill is required by the job, if it's not in the candidate's profile, DO NOT suggest demonstrating it.
+Your role is to find matches between the profile and requirements, NOT to suggest ways to demonstrate required skills they don't have.
 
 Job Details:
 Title: $jobTitle
@@ -108,7 +128,10 @@ $description
 Requirements:
 $requirements
 
-Candidate's Detailed Profile:
+Candidate's Profile:
+IMPORTANT: This profile contains the ONLY skills and experiences you can suggest demonstrating.
+If a required skill is not listed here, you MUST NOT suggest demonstrating it.
+Your job is to find matches between these skills and the requirements, not to suggest ways to demonstrate missing skills.
 
 Skills They Have:
 ${userSkills.join(', ')}
@@ -119,28 +142,35 @@ $formattedExperience
 Their Education:
 $formattedEducation
 
+Years of Experience: $yearsOfExperience
+
 Instructions:
-1. ONLY reference skills, experiences, and qualifications that are explicitly listed above
-2. DO NOT suggest highlighting experience they don't have
-3. Make specific connections between their ACTUAL experience and the job requirements
-4. If there's a gap between requirements and their experience, focus on transferable skills they DO have
+1. Start by identifying which job requirements match skills/experiences in their profile
+2. COMPLETELY IGNORE job requirements that don't match anything in their profile
+3. Only suggest demonstrating skills that are explicitly listed in their profile
+4. If a critical job requirement isn't matched in their profile, simply note the gap - do not suggest ways to demonstrate skills they don't have
+5. Focus on their actual, documented strengths that align with the role
 
 Generate 3 sections:
 
-1. "Your Relevant Experience:"
-ONLY mention experience they actually have that relates to this role.
-Reference specific companies and roles from their profile.
+1. "Skills You Can Demonstrate:"
+List ONLY the skills from their profile that match job requirements.
+Each skill mentioned must be explicitly present in their Skills, Experience, or Education sections.
+Do not include any required skills that aren't in their profile.
 
-2. "Your Matching Skills:"
-ONLY list skills they actually have that match the job requirements.
-Explain how they gained these skills based on their listed experience.
+2. "Relevant Experience You Have:"
+Only discuss experiences from their profile that match job requirements.
+Each experience must be directly linked to their work history or education.
+Ignore job requirements that don't match their documented experience.
 
-3. "Your Unique Background:"
-Focus on their actual education and experience that makes them stand out.
-Make specific connections to the job requirements.
+3. "Your Matching Strengths:"
+Focus only on strengths explicitly shown in their profile that match the role.
+Each strength must be evidenced by specific entries in their profile.
+If a job requirement has no matching strength in their profile, do not mention it.
 
 Format: Return exactly 3 sections, each with a header followed by a colon and detailed explanation.
-Every suggestion must be based on their actual profile data - no assumptions.
+Every suggestion must be based on explicit matches between their profile and the job requirements.
+If there are few matches between their profile and the requirements, acknowledge this fact rather than suggesting ways to demonstrate skills they don't have.
 ''';
 
       final response = await http.post(
@@ -154,18 +184,18 @@ Every suggestion must be based on their actual profile data - no assumptions.
           'messages': [
             {
               'role': 'system',
-              'content': '''You are a precise career coach who only makes recommendations based on verified information.
-Never suggest highlighting experience the candidate doesn't have.
-Only reference skills and experiences explicitly listed in their profile.
-If there's a mismatch between requirements and their experience, focus on transferable skills they actually possess.
-Be specific and reference actual companies, roles, and experiences from their profile.''',
+              'content': '''You are a precise career coach who creates highly personalized video application tips.
+Never use words like "maybe" or "perhaps" - only make definitive statements based on the candidate's actual experience.
+If they have specific experience, tell them to highlight it.
+If they don't have specific experience, tell them to focus on their transferable skills and genuine interest.
+Every piece of advice must be based on verified information from their profile.''',
             },
             {
               'role': 'user',
               'content': prompt,
             },
           ],
-          'temperature': 0.5, // Lower temperature for more focused responses
+          'temperature': 0.3, // Lower temperature for more precise responses
         }),
       );
 
@@ -186,6 +216,199 @@ Be specific and reference actual companies, roles, and experiences from their pr
       return sections;
     } catch (e) {
       print('Error generating video tips: $e');
+      rethrow;
+    }
+  }
+
+  /// Transcribes a video application and stores the transcription in Supabase
+  /// Returns the transcription ID if successful
+  static Future<String> transcribeAndStoreVideoApplication({
+    required String videoPath,
+    required String applicationId,
+    required String listingId,
+    required String userId,
+  }) async {
+    try {
+      print('=== Starting Transcription Process ===');
+      print('Input parameters:');
+      print('- Video path: $videoPath');
+      print('- Application ID: $applicationId');
+      print('- Listing ID: $listingId');
+      print('- User ID: $userId');
+      
+      // Verify video file exists
+      final videoFile = File(videoPath);
+      if (!await videoFile.exists()) {
+        print('ERROR: Video file not found at path: $videoPath');
+        throw Exception('Video file not found at path: $videoPath');
+      }
+      print('✓ Video file exists and is accessible');
+      
+      // Extract audio from video
+      print('\n=== Audio Extraction Phase ===');
+      print('Starting audio extraction from video...');
+      final audioFile = await _extractAudioFromVideo(videoPath);
+      print('✓ Audio extracted successfully to: ${audioFile.path}');
+      print('Audio file size: ${await audioFile.length()} bytes');
+      
+      // Create multipart request
+      print('\n=== Whisper API Request Phase ===');
+      print('Preparing Whisper API request...');
+      final request = http.MultipartRequest('POST', Uri.parse(_whisperUrl));
+      request.headers.addAll({
+        'Authorization': 'Bearer ${EnvConfig.openAiKey}',
+      });
+      
+      // Add the audio file
+      print('Adding audio file to request...');
+      request.files.add(await http.MultipartFile.fromPath(
+        'file',
+        audioFile.path,
+        filename: 'audio.m4a'
+      ));
+      
+      // Add parameters
+      request.fields.addAll({
+        'model': 'whisper-1',
+        'response_format': 'json',
+        'language': 'en'
+      });
+      print('✓ Request prepared with all required fields');
+      
+      // Send request and get response
+      print('\n=== Whisper API Response Phase ===');
+      print('Sending request to Whisper API...');
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+      print('Whisper API response status: ${response.statusCode}');
+      
+      if (response.statusCode != 200) {
+        print('ERROR: Whisper API error response:');
+        print(responseBody);
+        throw Exception('Failed to transcribe video: $responseBody');
+      }
+      
+      final transcriptionData = jsonDecode(responseBody);
+      final transcription = transcriptionData['text'];
+      print('✓ Transcription received successfully');
+      print('Transcription length: ${transcription.length} characters');
+      print('First 100 characters: ${transcription.substring(0, min<int>(100, transcription.length as int))}...');
+      
+      // Store in Supabase
+      print('\n=== Supabase Storage Phase ===');
+      print('Preparing to store transcription in Supabase...');
+      print('Data to insert:');
+      print('- Application ID: $applicationId');
+      print('- Listing ID: $listingId');
+      print('- User ID: $userId');
+      print('- Transcription length: ${transcription.length}');
+      
+      try {
+        print('Executing Supabase insert...');
+        final result = await supabase.from('video_transcriptions').insert({
+          'application_id': applicationId,
+          'listing_id': listingId,
+          'user_id': userId,
+          'transcription': transcription,
+          'created_at': DateTime.now().toIso8601String(),
+        }).select('id').single();
+        
+        print('✓ Transcription stored successfully');
+        print('Generated transcription ID: ${result['id']}');
+        
+        // Verify the stored transcription
+        print('\n=== Verification Phase ===');
+        print('Verifying stored transcription...');
+        final storedTranscription = await supabase
+            .from('video_transcriptions')
+            .select('transcription')
+            .eq('id', result['id'])
+            .single();
+            
+        print('✓ Verified stored transcription exists');
+        print('Stored transcription length: ${storedTranscription['transcription'].length}');
+        
+        // Clean up
+        print('\n=== Cleanup Phase ===');
+        print('Cleaning up temporary audio file...');
+        await audioFile.delete();
+        print('✓ Temporary audio file deleted');
+        
+        print('\n=== Process Complete ===');
+        print('Transcription process completed successfully');
+        
+        return result['id'];
+      } catch (supabaseError) {
+        print('\nERROR: Supabase operation failed:');
+        print('Error details: $supabaseError');
+        print('Stack trace:');
+        print(StackTrace.current);
+        rethrow;
+      }
+    } catch (e, stackTrace) {
+      print('\n=== ERROR IN TRANSCRIPTION PROCESS ===');
+      print('Error: $e');
+      print('Stack trace: $stackTrace');
+      
+      // Check FFmpeg installation
+      try {
+        print('\nChecking FFmpeg installation...');
+        final session = await FFmpegKit.execute('-version');
+        final returnCode = await session.getReturnCode();
+        print('FFmpegKit version check result:');
+        print(returnCode);
+      } catch (ffmpegKitError) {
+        print('ERROR: FFmpegKit not found or not properly installed');
+        print('FFmpegKit error: $ffmpegKitError');
+      }
+      
+      rethrow;
+    }
+  }
+  
+  /// Helper method to extract audio from video file
+  /// Returns a temporary File containing the audio in mp3 format
+  static Future<File> _extractAudioFromVideo(String videoPath) async {
+    try {
+      final tempDir = Directory.systemTemp;
+      final outputPath = '${tempDir.path}/temp_audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      
+      print('Starting audio extraction...');
+      print('Input video path: $videoPath');
+      print('Output audio path: $outputPath');
+      
+      // Use ffmpeg_kit_flutter to extract audio
+      // Using AAC encoding which is widely supported and included in the default build
+      final session = await FFmpegKit.execute(
+        '-i "$videoPath" -vn -c:a aac -ar 44100 -ac 2 -b:a 192k "$outputPath"'
+      );
+      
+      final returnCode = await session.getReturnCode();
+      final logs = await session.getLogs();
+      
+      // Print all logs for debugging
+      print('\nFFmpeg Logs:');
+      for (final log in logs) {
+        print('${log.getLevel()}: ${log.getMessage()}');
+      }
+      
+      if (ReturnCode.isSuccess(returnCode)) {
+        final outputFile = File(outputPath);
+        if (!await outputFile.exists()) {
+          throw Exception('Output audio file was not created');
+        }
+        
+        print('✓ Audio extraction successful');
+        print('Audio file size: ${await outputFile.length()} bytes');
+        
+        return outputFile;
+      } else {
+        // Format logs into a readable string
+        final logMessages = logs.map((log) => log.getMessage()).join('\n');
+        throw Exception('FFmpeg process failed with error code: $returnCode\nLogs:\n$logMessages');
+      }
+    } catch (e) {
+      print('Error extracting audio: $e');
       rethrow;
     }
   }
