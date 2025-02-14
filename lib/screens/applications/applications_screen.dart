@@ -75,8 +75,29 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
 
     try {
       final userId = supabase.auth.currentUser?.id;
-      if (userId == null) return;
+      print('\n=== Loading Applications Debug Log ===');
+      print('Current user ID: $userId');
+      print('Current view: $_currentView');
+      print('Job listing ID filter: ${widget.jobListingId}');
+      print('Status filter: ${widget.filterStatus}');
+      
+      if (userId == null) {
+        print('ERROR: No authenticated user found');
+        return;
+      }
 
+      // First verify if the user is a business user
+      print('\n=== Verifying Business User Status ===');
+      final userProfile = await supabase
+          .from('profiles')
+          .select('account_type, business_name')
+          .eq('id', userId)
+          .single();
+      
+      print('User profile data:');
+      print('Account type: ${userProfile['account_type']}');
+      print('Business name: ${userProfile['business_name']}');
+      
       var query = supabase
           .from('job_applications')
           .select('''
@@ -85,30 +106,44 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
               id,
               name,
               photo_url,
-              skills
+              experience_years,
+              profile_skills (
+                skills (
+                  name
+                )
+              )
             ),
             job_listings!inner (
               *,
               interview_message_template,
               acceptance_message_template,
               profiles!business_id (*)
+            ),
+            application_match_ratings (
+              id,
+              match_rating,
+              analysis_text
             )
           ''');
 
+      print('\n=== Building Query Filters ===');
       // Add job listing filter if specified
       if (widget.jobListingId != null) {
+        print('Adding job listing filter: ${widget.jobListingId}');
         query = query.eq('job_listing_id', widget.jobListingId);
       }
 
       // Add single application filter if specified
       if (widget.singleApplicationId != null) {
+        print('Adding single application filter: ${widget.singleApplicationId}');
         query = query.eq('id', widget.singleApplicationId);
       } else {
         // Only apply status filters if not viewing a single application
         if (widget.filterStatus != null) {
+          print('Adding status filter: ${widget.filterStatus}');
           query = query.eq('status', widget.filterStatus);
         } else if (_currentView != 'all') {
-          // For folder views, show applications with specific statuses
+          print('Adding view-specific status filter for: $_currentView');
           if (_currentView == 'accepted') {
             query = query.eq('status', 'accepted');
           } else if (_currentView == 'interviewing') {
@@ -117,46 +152,92 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
             query = query.or('status.eq.saved,status.eq.interviewing_saved');
           }
         } else {
-          // For the main feed, only show unprocessed applications
+          print('Adding filter for unprocessed applications');
           query = query.not('status', 'in', '(accepted,rejected,saved,interviewing,interviewing_saved)');
         }
       }
 
+      print('\n=== Executing Query ===');
       final response = await query.order('created_at', ascending: false);
+      
+      print('\n=== Response Analysis ===');
+      print('Total applications received: ${response.length}');
+      
+      if (response is List && response.isNotEmpty) {
+        final firstApp = response[0];
+        print('\nFirst Application Details:');
+        print('Application ID: ${firstApp['id']}');
+        print('Status: ${firstApp['status']}');
+        print('Created at: ${firstApp['created_at']}');
+        print('Job listing ID: ${firstApp['job_listing_id']}');
+        
+        print('\nBusiness User Check:');
+        print('Job listing business profile: ${firstApp['job_listings']['profiles']}');
+        print('Account type: ${firstApp['job_listings']['profiles']['account_type']}');
+        
+        print('\nMatch Rating Data:');
+        print('Match ratings array: ${firstApp['application_match_ratings']}');
+        if (firstApp['application_match_ratings'] != null) {
+          if (firstApp['application_match_ratings'] is List) {
+            print('Match ratings count: ${firstApp['application_match_ratings'].length}');
+            if (firstApp['application_match_ratings'].isNotEmpty) {
+              print('First match rating: ${firstApp['application_match_ratings'][0]}');
+              print('Rating value: ${firstApp['application_match_ratings'][0]['match_rating']}');
+            } else {
+              print('Match ratings array is empty');
+            }
+          } else {
+            print('Match ratings is not a List: ${firstApp['application_match_ratings'].runtimeType}');
+          }
+        } else {
+          print('No match ratings found');
+        }
+      } else {
+        print('No applications found in response');
+      }
 
       setState(() {
         if (_currentView == 'all') {
           _applications = List<Map<String, dynamic>>.from(response);
           _isLoading = false;
+          print('\nUpdated main applications list: ${_applications.length} items');
         } else {
           _tabApplications[_currentView] = List<Map<String, dynamic>>.from(response);
           _tabLoadingStates[_currentView] = false;
+          print('\nUpdated $_currentView tab: ${_tabApplications[_currentView]?.length} items');
         }
       });
 
       // Initialize video controllers for visible applications
       final applicationsToInitialize = _currentView == 'all' ? _applications : _tabApplications[_currentView]!;
+      print('\n=== Video Controller Initialization ===');
+      print('Applications to initialize: ${applicationsToInitialize.length}');
+      
       for (var application in applicationsToInitialize) {
         final videoUrl = application['video_url'];
         if (videoUrl != null) {
+          print('Initializing video controller for: $videoUrl');
           await _initializeVideoController(videoUrl);
         }
       }
 
-      // Play the first video if viewing a single application
-      if (widget.singleApplicationId != null && applicationsToInitialize.isNotEmpty) {
-        final videoUrl = applicationsToInitialize[0]['video_url'];
-        if (_videoControllers[videoUrl] != null) {
-          await _videoControllers[videoUrl]!.play();
-        }
-      }
-
-      // Start loading all thumbnails in the background
-      _loadAllThumbnails();
+      print('\n=== Load Applications Complete ===');
 
     } catch (e, stackTrace) {
-      print('Error loading applications: $e');
-      print('Stack trace: $stackTrace');
+      print('\n=== Error Loading Applications ===');
+      print('Error type: ${e.runtimeType}');
+      print('Error message: $e');
+      print('Stack trace:');
+      print(stackTrace);
+      
+      if (e is PostgrestException) {
+        print('\nPostgrest Error Details:');
+        print('Code: ${e.code}');
+        print('Message: ${e.message}');
+        print('Details: ${e.details}');
+        print('Hint: ${e.hint}');
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -237,31 +318,50 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
 
   Future<void> _preloadVideo(String videoUrl) async {
     try {
+      print('\n=== Starting Video Preload ===');
+      print('Video URL to preload: $videoUrl');
+      
       final storagePath = videoUrl.split('applications/').last;
+      print('Storage path: $storagePath');
+      
+      print('Requesting signed URL...');
       final signedUrl = await supabase.storage
           .from('applications')
           .createSignedUrl(storagePath, 3600);
+      print('Received signed URL: $signedUrl');
 
+      print('Creating controller...');
       final controller = VideoPlayerController.network(
         signedUrl,
         videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
       );
 
+      print('Initializing controller...');
       await controller.initialize();
+      print('Setting video to loop...');
       await controller.setLooping(true);
       
       if (!mounted) {
+        print('Widget unmounted during preload, disposing controller');
         controller.dispose();
         return;
       }
 
       setState(() {
+        print('Storing controller in state');
         _videoControllers[videoUrl] = controller;
         _preloadingVideos[videoUrl] = false;
         _preloadQueue.remove(videoUrl);
       });
+      
+      print('=== Video Preload Complete ===');
     } catch (e) {
-      print('Error preloading video: $e');
+      print('\n=== Video Preload Error ===');
+      print('Error type: ${e.runtimeType}');
+      print('Error message: $e');
+      print('Stack trace:');
+      print(StackTrace.current);
+      
       _preloadingVideos[videoUrl] = false;
       _preloadQueue.remove(videoUrl);
     }
@@ -270,28 +370,41 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
   Future<void> _initializeVideoController(String videoUrl) async {
     if (_videoControllers[videoUrl] == null) {
       try {
-        print('Starting video initialization for: $videoUrl');
+        print('\n=== Starting Video Initialization ===');
+        print('Input video URL: $videoUrl');
 
         final storagePath = videoUrl.split('applications/').last;
+        print('Storage path extracted: $storagePath');
+
+        print('Requesting signed URL from Supabase...');
         final signedUrl = await supabase.storage
             .from('applications')
             .createSignedUrl(storagePath, 3600);
+        print('Received signed URL: $signedUrl');
 
+        print('Creating video controller...');
         final controller = VideoPlayerController.network(
           signedUrl,
           videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
         );
 
         try {
+          print('Initializing controller...');
           await controller.initialize();
+          print('Controller initialized successfully');
+          
+          print('Setting video to loop...');
           await controller.setLooping(true);
+          print('Setting volume...');
           await controller.setVolume(1.0);
 
           if (!mounted) {
+            print('Widget not mounted, disposing controller');
             controller.dispose();
             return;
           }
 
+          print('Updating state with new controller');
           setState(() {
             _videoControllers[videoUrl] = controller;
           });
@@ -299,15 +412,32 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
           // Only play if this is the current video and we're still mounted
           if (mounted && _applications.isNotEmpty && 
               _applications[_currentIndex]['video_url'] == videoUrl) {
+            print('Playing video automatically');
             await controller.play();
           }
+          
+          print('=== Video Initialization Complete ===');
         } catch (initError) {
-          print('Error initializing controller: $initError');
+          print('Error during controller initialization:');
+          print(initError);
+          print('Stack trace:');
+          print(StackTrace.current);
           controller.dispose();
           throw initError;
         }
       } catch (e) {
-        print('Error initializing video: $e');
+        print('\n=== Video Initialization Error ===');
+        print('Error type: ${e.runtimeType}');
+        print('Error message: $e');
+        print('Stack trace:');
+        print(StackTrace.current);
+        
+        if (e is StorageException) {
+          print('Storage error details:');
+          print('Status code: ${e.statusCode}');
+          print('Error message: ${e.message}');
+        }
+        
         if (mounted) {
           _showNotification('Error loading video. Tap to retry', isSuccess: false);
         }
@@ -328,12 +458,28 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
           .from('job_applications')
           .select('''
             *,
-            profiles!inner (*),
+            profiles!inner (
+              id,
+              name,
+              photo_url,
+              experience_years,
+              profile_skills (
+                skills (
+                  name
+                )
+              )
+            ),
             job_listings!inner (
               *,
               interview_message_template,
               acceptance_message_template,
-              profiles!business_id (*)
+              profiles!business_id (
+                id,
+                name,
+                photo_url,
+                business_name,
+                account_type
+              )
             )
           ''')
           .eq('id', applicationId)
@@ -643,77 +789,42 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
   void _onPageChanged(int index) async {
     if (!mounted) return;
     
+    print('\n=== Page Change Event ===');
+    print('Changing to index: $index');
+    
     // Pause current video before changing state
     final currentVideoUrl = _applications[_currentIndex]['video_url'];
-    await _videoControllers[currentVideoUrl]?.pause();
+    if (currentVideoUrl != null) {
+      print('Pausing current video: $currentVideoUrl');
+      await _videoControllers[currentVideoUrl]?.pause();
+    }
     
     setState(() => _currentIndex = index);
     
     // Initialize and play new video
     final newVideoUrl = _applications[index]['video_url'];
-    if (_videoControllers[newVideoUrl] == null) {
-      await _initializeVideoController(newVideoUrl);
-    } else {
-      await _videoControllers[newVideoUrl]?.seekTo(Duration.zero);
-      await _videoControllers[newVideoUrl]?.play();
+    if (newVideoUrl != null) {
+      print('Preparing new video: $newVideoUrl');
+      if (_videoControllers[newVideoUrl] == null) {
+        print('Video controller not found, initializing...');
+        await _initializeVideoController(newVideoUrl);
+      } else {
+        print('Reusing existing controller');
+        await _videoControllers[newVideoUrl]?.seekTo(Duration.zero);
+        await _videoControllers[newVideoUrl]?.play();
+      }
     }
     
     // Mark application as viewed if in 'all' view
     if (_currentView == 'all') {
+      print('Marking application as viewed');
       _markApplicationAsViewed(_applications[index]['id']);
     }
     
-    // Start preloading next set of videos
+    print('Starting video preload for next pages');
     _preloadVideos(index);
     
-    // Clean up videos that are no longer needed
-    final keepIndices = List.generate(
-      _preloadAhead * 2 + 1,
-      (i) => index - _preloadAhead + i,
-    ).where((i) => i >= 0 && i < _applications.length);
-    
-    final keepUrls = keepIndices
-        .map((i) => _applications[i]['video_url'])
-        .where((url) => url != null)
-        .toSet();
-    
-    // Dispose controllers that are out of range
-    final urlsToDispose = _videoControllers.keys
-        .where((url) => !keepUrls.contains(url) && !_preloadQueue.contains(url))
-        .toList();
-    
-    for (var url in urlsToDispose) {
-      await _videoControllers[url]?.dispose();
-      _videoControllers.remove(url);
-    }
-
-    // Check if we've reached the end of the feed
-    if (index == _applications.length - 1) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('You\'ve reached the end of new applications'),
-            backgroundColor: Colors.black87,
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            duration: const Duration(seconds: 3),
-            action: SnackBarAction(
-              label: 'View All',
-              textColor: Colors.white,
-              onPressed: () {
-                setState(() {
-                  _currentView = 'accepted';
-                  _loadApplications();
-                });
-              },
-            ),
-          ),
-        );
-      }
-    }
+    print('=== Page Change Complete ===');
   }
 
   Widget _buildApplicationInfo(Map<String, dynamic> application) {
@@ -721,7 +832,9 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
     final isSaved = application['status'] == 'accepted' || 
                     application['status'].toString().startsWith('accepted_');
     final hasResume = application['resume_url'] != null;
-    final skills = profile['skills'] as List?;
+    final skills = profile['profile_skills'] as List?;
+    final matchRating = application['application_match_ratings']?[0]?['match_rating'];
+    final isBusinessUser = application['job_listings']['profiles']['account_type'] == 'business';
     
     return Stack(
       children: [
@@ -743,16 +856,14 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
               _buildActionButton(
                 icon: Icons.person,
                 label: 'Profile',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => UserProfileScreen(
-                        userId: profile['id'],
-                      ),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => UserProfileScreen(
+                      userId: profile['id'],
                     ),
-                  );
-                },
+                  ),
+                ),
               ),
               if (hasResume) ...[
                 const SizedBox(height: 12),
@@ -844,14 +955,109 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                         ],
                       ),
                     ),
-                    // Add Transcription Button
-                    if (application['status'] != 'pending' && 
-                        application['job_listings']['profiles']['account_type'] == 'business')
-                      _buildActionButton(
-                        icon: Icons.description,
-                        label: 'Transcription',
-                        onTap: () => _showTranscription(application['id']),
+                    // Match Rating for Business Users
+                    if (isBusinessUser && matchRating != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(8), // Add padding around for larger touch target
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque, // Makes entire area clickable
+                          onTap: () {
+                            final analysis = application['application_match_ratings'] is Map ? 
+                                application['application_match_ratings']['analysis_text'] : 
+                                application['application_match_ratings'] is List && 
+                                application['application_match_ratings'].isNotEmpty ? 
+                                    application['application_match_ratings'][0]['analysis_text'] : null;
+                            
+                            if (analysis != null) {
+                              showDialog(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.analytics,
+                                        color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Candidate Match: ${matchRating?.toStringAsFixed(1) ?? 'N/A'}',
+                                          style: TextStyle(
+                                            color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  content: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Why this rating?',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: Colors.grey[800],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Flexible(
+                                        child: SingleChildScrollView(
+                                          child: Text(
+                                            analysis,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('Close'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _getMatchRatingColor(matchRating),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.analytics,
+                                  color: _getMatchRatingColor(matchRating),
+                                  size: 10,
+                                ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  matchRating.toStringAsFixed(1),
+                                  style: TextStyle(
+                                    color: _getMatchRatingColor(matchRating),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
+                    ],
                   ],
                 ),
                 if (skills != null && skills.isNotEmpty) ...[
@@ -1129,27 +1335,15 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
             final application = filteredApplications[index];
             final profile = application['profiles'] as Map<String, dynamic>;
             final videoUrl = application['video_url'];
+            final matchRating = application['application_match_ratings']?[0]?['match_rating'];
+            final isBusinessUser = application['job_listings']['profiles']['account_type'] == 'business';
             List<String> skills = [];
             
-            // Handle skills data type conversion
-            if (profile['skills'] != null) {
-              if (profile['skills'] is String) {
-                // If skills is a string, convert it to a list
-                skills = profile['skills']
-                    .toString()
-                    .replaceAll('[', '')
-                    .replaceAll(']', '')
-                    .split(',')
-                    .map((s) => s.trim())
-                    .where((s) => s.isNotEmpty)
-                    .toList();
-              } else if (profile['skills'] is List) {
-                // If skills is already a list, map it to strings
-                skills = (profile['skills'] as List)
-                    .map((s) => s.toString().trim())
-                    .where((s) => s.isNotEmpty)
-                    .toList();
-              }
+            if (profile['profile_skills'] != null) {
+              skills = (profile['profile_skills'] as List)
+                  .where((ps) => ps['skills'] != null)
+                  .map((ps) => ps['skills']['name'].toString())
+                  .toList();
             }
             
             return GestureDetector(
@@ -1224,15 +1418,123 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          profile['name'] ?? 'Anonymous',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                profile['name'] ?? 'Anonymous',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (isBusinessUser && matchRating != null) ...[
+                              Container(
+                                padding: const EdgeInsets.all(8), // Add padding around for larger touch target
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque, // Makes entire area clickable
+                                  onTap: () {
+                                    final analysis = application['application_match_ratings'] is Map ? 
+                                        application['application_match_ratings']['analysis_text'] : 
+                                        application['application_match_ratings'] is List && 
+                                        application['application_match_ratings'].isNotEmpty ? 
+                                            application['application_match_ratings'][0]['analysis_text'] : null;
+                                            
+                                    if (analysis != null) {
+                                      showDialog(
+                                        context: context,
+                                        builder: (context) => AlertDialog(
+                                          title: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.analytics,
+                                                color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  'Candidate Match: ${matchRating?.toStringAsFixed(1) ?? 'N/A'}',
+                                                  style: TextStyle(
+                                                    color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          content: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Why this rating?',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: Colors.grey[800],
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Flexible(
+                                                child: SingleChildScrollView(
+                                                  child: Text(
+                                                    analysis,
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      height: 1.4,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context),
+                                              child: const Text('Close'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withOpacity(0.6),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: _getMatchRatingColor(matchRating),
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.analytics,
+                                          color: _getMatchRatingColor(matchRating),
+                                          size: 10,
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          matchRating.toStringAsFixed(1),
+                                          style: TextStyle(
+                                            color: _getMatchRatingColor(matchRating),
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         if (application['cover_note'] != null && 
                             application['cover_note'].toString().isNotEmpty)
@@ -1300,12 +1602,130 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
   }
 
   Widget _buildApplicationVideo(Map<String, dynamic> application) {
+    // Get match rating if available
+    num? matchRating;
+    final matchRatings = application['application_match_ratings'];
+    
+    // Handle both Map and List data structures
+    if (matchRatings != null) {
+      if (matchRatings is List) {
+        matchRating = matchRatings.isNotEmpty ? matchRatings[0]['match_rating'] : null;
+      } else if (matchRatings is Map) {
+        matchRating = matchRatings['match_rating'];
+      }
+    }
+    
+    final isBusinessUser = application['job_listings']['profiles']['account_type'] == 'business';
+    
     return Stack(
       children: [
         // Full screen video player
         Positioned.fill(
           child: _buildVideoPlayer(application['video_url']),
         ),
+
+        // Match Rating for Business Users - Prominently displayed in bottom right
+        if (isBusinessUser) ...[
+          Positioned(
+            right: 16,
+            bottom: 100, // Position above the action buttons
+            child: GestureDetector(
+              onTap: () {
+                final analysis = matchRatings is Map ? 
+                    matchRatings['analysis_text'] : 
+                    matchRatings is List && matchRatings.isNotEmpty ? 
+                        matchRatings[0]['analysis_text'] : null;
+                        
+                if (analysis != null) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Row(
+                        children: [
+                          Icon(
+                            Icons.analytics,
+                            color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Candidate Match: ${matchRating?.toStringAsFixed(1) ?? 'N/A'}',
+                              style: TextStyle(
+                                color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Why this rating?',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Colors.grey[800],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Flexible(
+                            child: SingleChildScrollView(
+                              child: Text(
+                                analysis,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                    width: 2,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.analytics,
+                      color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                      size: 24,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      matchRating != null ? matchRating.toStringAsFixed(1) : 'N/A',
+                      style: TextStyle(
+                        color: matchRating != null ? _getMatchRatingColor(matchRating) : Colors.grey,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 24,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
 
         // Right side action buttons with background
         Positioned(
@@ -1709,78 +2129,25 @@ class _ApplicationsScreenState extends State<ApplicationsScreen> {
 
   @override
   void dispose() {
+    // Clean up video controllers
     for (var controller in _videoControllers.values) {
       controller.dispose();
     }
     _nextVideoController?.dispose();
     _pageController.dispose();
+
+    // Clean up Supabase realtime connection
+    supabase.removeAllChannels();
+    
     super.dispose();
   }
 
-  Widget _buildApplicationCard(Map<String, dynamic> application) {
-    return Card(
-      margin: const EdgeInsets.all(8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ... existing application card content ...
-          
-          // Add Transcription Button
-          if (application['status'] != 'pending' && 
-              application['job_listings']['profiles']['account_type'] == 'business')
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: ElevatedButton.icon(
-                onPressed: () => _showTranscription(application['id']),
-                icon: const Icon(Icons.description),
-                label: const Text('View Transcription'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _showTranscription(String applicationId) async {
-    try {
-      // Fetch transcription from Supabase
-      final transcriptionData = await supabase
-          .from('video_transcriptions')
-          .select('transcription')
-          .eq('application_id', applicationId)
-          .single();
-
-      if (!mounted) return;
-
-      // Show transcription in dialog
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Video Transcription'),
-          content: SingleChildScrollView(
-            child: Text(
-              transcriptionData['transcription'] ?? 'No transcription available',
-              style: const TextStyle(fontSize: 14),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      print('Error fetching transcription: $e');
-      if (mounted) {
-        _showNotification('Error loading transcription', isSuccess: false);
-      }
-    }
+  // Keep the _getMatchRatingColor helper method
+  Color _getMatchRatingColor(num rating) {
+    if (rating >= 8.0) return Colors.green;
+    if (rating >= 6.0) return Colors.yellow;
+    if (rating >= 4.0) return Colors.orange;
+    return Colors.red;
   }
 }
 

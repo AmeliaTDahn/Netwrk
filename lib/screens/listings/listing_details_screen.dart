@@ -69,8 +69,11 @@ class _ListingDetailsScreenState extends State<ListingDetailsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _isLoading = false);
-        BannerNotification.show(context, 'Error refreshing listing: $e');
+        setState(() {
+          _isLoading = false;
+          // Just update with the existing listing data instead of showing an error
+          _updatedListing = widget.listing;
+        });
       }
     }
   }

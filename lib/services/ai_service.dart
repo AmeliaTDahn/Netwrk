@@ -221,8 +221,8 @@ Every piece of advice must be based on verified information from their profile.'
   }
 
   /// Transcribes a video application and stores the transcription in Supabase
-  /// Returns the transcription ID if successful
-  static Future<String> transcribeAndStoreVideoApplication({
+  /// Returns the transcription ID and match rating if successful
+  static Future<Map<String, dynamic>> transcribeAndStoreVideoApplication({
     required String videoPath,
     required String applicationId,
     required String listingId,
@@ -334,10 +334,24 @@ Every piece of advice must be based on verified information from their profile.'
         await audioFile.delete();
         print('✓ Temporary audio file deleted');
         
-        print('\n=== Process Complete ===');
-        print('Transcription process completed successfully');
+        // Analyze the transcription
+        print('\n=== Starting Match Analysis ===');
+        final analysis = await analyzeApplicationTranscription(
+          transcription: transcription,
+          applicationId: applicationId,
+          listingId: listingId,
+          userId: userId,
+        );
         
-        return result['id'];
+        print('\n=== Process Complete ===');
+        print('Transcription and analysis completed successfully');
+        print('Match rating: ${analysis['rating']}');
+        
+        return {
+          'transcriptionId': result['id'],
+          'matchRating': analysis['rating'],
+          'matchAnalysis': analysis['analysis'],
+        };
       } catch (supabaseError) {
         print('\nERROR: Supabase operation failed:');
         print('Error details: $supabaseError');
@@ -409,6 +423,179 @@ Every piece of advice must be based on verified information from their profile.'
       }
     } catch (e) {
       print('Error extracting audio: $e');
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> analyzeApplicationTranscription({
+    required String transcription,
+    required String applicationId,
+    required String listingId,
+    required String userId,
+  }) async {
+    try {
+      print('\n=== Starting Application Analysis ===');
+      print('Fetching job listing and applicant profile data...');
+
+      // Fetch job listing details
+      final jobListing = await supabase
+          .from('job_listings')
+          .select('''
+            title,
+            description,
+            requirements,
+            business_id,
+            profiles (
+              business_name
+            )
+          ''')
+          .eq('id', listingId)
+          .single();
+
+      // Fetch applicant profile
+      final applicantProfile = await supabase
+          .from('profiles')
+          .select('''
+            name,
+            experience_years,
+            education,
+            bio
+          ''')
+          .eq('id', userId)
+          .single();
+
+      // Fetch user's skills
+      final skillsResponse = await supabase
+          .from('profile_skills')
+          .select('''
+            skills (
+              name
+            )
+          ''')
+          .eq('profile_id', userId);
+
+      // Extract skill names from the response and properly cast to List<String>
+      final List<String> skills = (skillsResponse as List<dynamic>)
+          .map((record) => (record['skills'] as Map<String, dynamic>)['name'] as String)
+          .toList();
+
+      print('✓ Data fetched successfully');
+      print('Skills found: ${skills.join(', ')}');
+      print('Preparing analysis request...');
+
+      final response = await http.post(
+        Uri.parse(_baseUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${EnvConfig.openAiKey}',
+        },
+        body: jsonEncode({
+          'model': 'gpt-4-turbo-preview',
+          'messages': [
+            {
+              'role': 'system',
+              'content': '''You are an expert AI recruiter tasked with analyzing video application transcriptions.
+Your goal is to evaluate how well a candidate matches a job listing based on their video application, work experience, and profile.
+
+You must provide:
+1. A match rating from 1.0 to 10.0 (one decimal point)
+2. A detailed analysis explaining the rating
+
+Rules for rating:
+- Use a scale of 1.0 (no match) to 10.0 (perfect match)
+- Consider both hard skills and soft skills
+- Weight factors in this order:
+  1. Relevant work experience (most important)
+  2. Video content and communication
+  3. Skills and education
+- Look for specific examples of relevant work experience
+- Compare years of experience against job requirements
+- Consider the quality and relevance of past roles
+- Evaluate how they presented their experience in the video
+- Consider communication skills demonstrated
+- Be objective and fair in your assessment
+- A 10.0 is rare, but possible if the candidate is a near-perfect fit
+- Don't be afraid to give a 10.0, or high rating, if the candidate is a near-perfect fit
+
+Keep your analysis focused on:
+1. How their work experience matches the role
+2. Specific examples from their background
+3. How they presented their experience in the video
+4. Any gaps between their experience and requirements
+
+Your response must be in JSON format with two fields:
+{
+  "rating": number between 1.0 and 10.0,
+  "analysis": detailed explanation string
+}'''
+            },
+            {
+              'role': 'user',
+              'content': '''Please analyze this video application:
+
+Job Details:
+Title: ${jobListing['title']}
+Description: ${jobListing['description']}
+Requirements: ${jobListing['requirements']}
+
+Applicant Profile:
+Name: ${applicantProfile['name']}
+Skills: ${skills.join(', ')}
+Years of Experience: ${applicantProfile['experience_years']}
+Education: ${applicantProfile['education']}
+Bio: ${applicantProfile['bio']}
+
+Video Application Transcription:
+$transcription
+
+Analyze how well this candidate matches the job requirements based on their video application and profile.
+Provide a rating from 1.0 to 10.0 and a detailed analysis.
+Remember to focus more heavily on what they demonstrated in the video than what's in their profile.'''
+            }
+          ],
+          'response_format': { 'type': 'json_object' },
+          'temperature': 0.3,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        print('ERROR: Failed to analyze application');
+        print('Response: ${response.body}');
+        throw Exception('Failed to analyze application: ${response.body}');
+      }
+
+      final data = jsonDecode(response.body);
+      final result = jsonDecode(data['choices'][0]['message']['content']);
+      
+      print('✓ Analysis completed successfully');
+      print('Match rating: ${result['rating']}');
+      
+      // Store the results
+      print('\n=== Storing Analysis Results ===');
+      final storedResult = await supabase
+          .from('application_match_ratings')
+          .insert({
+            'application_id': applicationId,
+            'listing_id': listingId,
+            'user_id': userId,
+            'match_rating': result['rating'],
+            'analysis_text': result['analysis'],
+          })
+          .select('id')
+          .single();
+          
+      print('✓ Analysis results stored successfully');
+      print('Generated rating ID: ${storedResult['id']}');
+      
+      return {
+        'rating': result['rating'],
+        'analysis': result['analysis'],
+        'id': storedResult['id']
+      };
+    } catch (e, stackTrace) {
+      print('\n=== ERROR IN APPLICATION ANALYSIS ===');
+      print('Error: $e');
+      print('Stack trace: $stackTrace');
       rethrow;
     }
   }

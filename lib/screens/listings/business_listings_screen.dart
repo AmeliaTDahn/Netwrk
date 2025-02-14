@@ -28,17 +28,37 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
   }
 
   Future<void> _loadListings() async {
+    print('\n=== Starting Business Listings Load ===');
     setState(() => _isLoading = true);
 
     try {
       final userId = supabase.auth.currentUser?.id;
-      if (userId == null) return;
+      if (userId == null) {
+        print('Error: No authenticated user found');
+        return;
+      }
+      print('Current User ID: $userId');
 
-      // Load owned listings
+      // Get user profile to verify business status
+      print('\nFetching user profile...');
+      final userProfile = await supabase
+          .from('profiles')
+          .select('account_type, business_name')
+          .eq('id', userId)
+          .single();
+      print('User Profile: ${userProfile.toString()}');
+      print('Account Type: ${userProfile['account_type']}');
+
+      print('\nAttempting to load owned listings...');
+      // Load owned listings with a simpler query
       final ownedResponse = await supabase
           .from('job_listings')
           .select('''
             *,
+            profiles!business_id (
+              business_name,
+              photo_url
+            ),
             job_applications (
               id,
               status,
@@ -46,27 +66,137 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
               video_url,
               resume_url,
               cover_note,
-              created_at,
-              profiles!applicant_id (
-                id,
-                name,
-                photo_url,
-                education,
-                experience_years,
-                skills
-              )
+              created_at
             )
           ''')
           .eq('business_id', userId)
           .order('created_at', ascending: false);
 
-      // Load shared listings
+      print('Owned Listings Response: ${ownedResponse.length} listings found');
+      if (ownedResponse.isEmpty) {
+        print('No owned listings found. Raw response: $ownedResponse');
+      } else {
+        print('First owned listing: ${ownedResponse[0]}');
+      }
+
+      // Get signed URLs for all videos
+      final allVideoUrls = ownedResponse
+          .expand((listing) => (listing['job_applications'] as List)
+          .where((app) => app['video_url'] != null)
+          .map((app) => app['video_url'] as String))
+          .toSet();
+
+      print('\n=== Video URL Processing ===');
+      print('Total video URLs found: ${allVideoUrls.length}');
+      allVideoUrls.forEach((url) => print('Video URL: $url'));
+
+      print('\nFetching signed URLs for ${allVideoUrls.length} videos');
+      Map<String, String> signedUrls = {};
+      for (var videoUrl in allVideoUrls) {
+        try {
+          print('\nProcessing video URL: $videoUrl');
+          final storagePath = videoUrl.split('applications/').last;
+          print('Storage path: $storagePath');
+          
+          final signedUrl = await supabase.storage
+              .from('applications')
+              .createSignedUrl(storagePath, 3600);
+          print('Generated signed URL: $signedUrl');
+          
+          signedUrls[videoUrl] = signedUrl;
+        } catch (e) {
+          print('Error getting signed URL for $videoUrl: $e');
+        }
+      }
+
+      print('\n=== Signed URLs Summary ===');
+      print('Total signed URLs generated: ${signedUrls.length}');
+      signedUrls.forEach((original, signed) {
+        print('Original: $original');
+        print('Signed: $signed\n');
+      });
+
+      // If we need applicant profiles, load them separately
+      final applicantIds = ownedResponse
+          .expand((listing) => (listing['job_applications'] as List)
+          .map((app) {
+            print('\nExtracting applicant ID from application:');
+            print('Application: ${app['id']}');
+            print('Applicant ID: ${app['applicant_id']}');
+            return app['applicant_id'];
+          }))
+          .toSet()
+          .toList();
+
+      Map<String, dynamic> applicantProfiles = {};
+      if (applicantIds.isNotEmpty) {
+        print('\n=== Loading Applicant Profiles ===');
+        print('Applicant IDs to load: $applicantIds');
+        
+        // First fetch basic profile information without skills
+        print('\nExecuting profiles query...');
+        final applicantsResponse = await supabase
+            .from('profiles')
+            .select('''
+              id,
+              name,
+              photo_url,
+              education,
+              experience_years
+            ''')
+            .in_('id', applicantIds);
+
+        // Then fetch skills separately
+        print('\nFetching skills for profiles...');
+        final skillsResponse = await supabase
+            .from('profile_skills')
+            .select('''
+              profile_id,
+              skills (
+                name
+              )
+            ''')
+            .in_('profile_id', applicantIds);
+
+        // Create a map of profile_id to skills
+        final skillsMap = Map.fromEntries(
+          (skillsResponse as List).map((ps) => MapEntry(
+            ps['profile_id'],
+            (ps['skills'] != null ? [ps['skills']['name'].toString()] : <String>[])
+          ))
+        );
+        
+        print('\nTransforming profiles data...');
+        applicantProfiles = Map.fromEntries(
+          (applicantsResponse as List).map((profile) {
+            print('\nProcessing profile: ${profile['id']}');
+            
+            final result = {
+              ...Map<String, dynamic>.from(profile),
+              'skills': skillsMap[profile['id']] ?? <String>[]
+            };
+            print('Final profile data: $result');
+            return MapEntry(profile['id'], result);
+          })
+        );
+        
+        print('\n=== Applicant Profiles Processing Complete ===');
+        print('Total profiles processed: ${applicantProfiles.length}');
+        print('Sample profile IDs: ${applicantProfiles.keys.take(3).toList()}');
+      }
+
+      print('\nAttempting to load shared listings...');
+      // Load shared listings with a simpler query
       final sharedResponse = await supabase
           .from('shared_listings')
           .select('''
             *,
             job_listings!inner (
               *,
+              profiles!business_id (
+                business_name,
+                photo_url
+              ),
               job_applications (
                 id,
                 status,
@@ -74,40 +204,153 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
                 video_url,
                 resume_url,
                 cover_note,
-                created_at,
-                profiles!applicant_id (
-                  id,
-                  name,
-                  photo_url,
-                  education,
-                  experience_years,
-                  skills
-                )
-              ),
-              shared_by_profile:profiles!business_id (
-                id,
-                business_name,
-                photo_url
+                created_at
               )
             )
           ''')
           .eq('shared_with', userId)
           .order('shared_at', ascending: false);
 
-      setState(() {
-        _listings = (ownedResponse as List).map((item) => Map<String, dynamic>.from(item)).toList();
-        _sharedListings = (sharedResponse as List).map((shared) => {
-              ...Map<String, dynamic>.from(shared['job_listings']),
-              'shared_by': shared['shared_by'],
-              'shared_at': shared['shared_at'],
+      // Get signed URLs for shared listing videos
+      final sharedVideoUrls = sharedResponse
+          .expand((shared) => (shared['job_listings']['job_applications'] as List)
+          .where((app) => app['video_url'] != null)
+          .map((app) => app['video_url'] as String))
+          .toSet();
+
+      print('\nFetching signed URLs for ${sharedVideoUrls.length} shared videos');
+      for (var videoUrl in sharedVideoUrls) {
+        if (!signedUrls.containsKey(videoUrl)) {
+          try {
+            final storagePath = videoUrl.split('applications/').last;
+            final signedUrl = await supabase.storage
+                .from('applications')
+                .createSignedUrl(storagePath, 3600);
+            signedUrls[videoUrl] = signedUrl;
+          } catch (e) {
+            print('Error getting signed URL for shared video $videoUrl: $e');
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          print('\n=== Building Listings State ===');
+          // Add applicant profiles and signed video URLs to job applications
+          _listings = (ownedResponse as List).map((listing) {
+            print('\nProcessing listing: ${listing['id']}');
+            print('Applications count: ${(listing['job_applications'] as List).length}');
+            
+            final applications = ((listing['job_applications'] ?? []) as List).map((app) {
+              print('\n=== Processing Application ===');
+              print('Application ID: ${app['id']}');
+              print('Applicant ID: ${app['applicant_id']}');
+              print('Original video URL: ${app['video_url']}');
+              
+              final profile = applicantProfiles[app['applicant_id']];
+              print('Found profile: $profile');
+              
+              final signedVideoUrl = app['video_url'] != null ? signedUrls[app['video_url']] : null;
+              print('Signed video URL: $signedVideoUrl');
+              
+              final mappedApp = {
+                ...Map<String, dynamic>.from(app),
+                'profiles': profile,
+                'signed_video_url': signedVideoUrl,
+              };
+              print('Final mapped application: $mappedApp');
+              return mappedApp;
             }).toList();
-        _isLoading = false;
-      });
-    } catch (e) {
+            
+            print('\n=== Applications Summary for Listing ===');
+            print('Total applications: ${applications.length}');
+            print('Applications with videos: ${applications.where((app) => app['signed_video_url'] != null).length}');
+            
+            final mappedListing = Map<String, dynamic>.from({
+              ...listing,
+              'job_applications': applications
+            });
+            print('Final listing structure: $mappedListing');
+            return mappedListing;
+          }).toList();
+
+          // Add applicant profiles and signed video URLs to shared listings
+          _sharedListings = (sharedResponse as List).map((shared) {
+            print('\nProcessing shared listing');
+            final listing = shared['job_listings'];
+            final applications = ((listing['job_applications'] ?? []) as List).map((app) {
+              print('\n=== Processing Application ===');
+              print('Application ID: ${app['id']}');
+              print('Applicant ID: ${app['applicant_id']}');
+              print('Original video URL: ${app['video_url']}');
+              
+              final profile = applicantProfiles[app['applicant_id']];
+              print('Found profile: $profile');
+              
+              final signedVideoUrl = app['video_url'] != null ? signedUrls[app['video_url']] : null;
+              print('Signed video URL: $signedVideoUrl');
+              
+              final mappedApp = {
+                ...Map<String, dynamic>.from(app),
+                'profiles': profile,
+                'signed_video_url': signedVideoUrl,
+              };
+              print('Final mapped application: $mappedApp');
+              return mappedApp;
+            }).toList();
+            
+            final mappedListing = Map<String, dynamic>.from({
+              ...Map<String, dynamic>.from(listing),
+              'job_applications': applications,
+              'shared_by': listing['profiles'],
+              'shared_at': shared['shared_at']
+            });
+            print('Final shared listing structure: $mappedListing');
+            return mappedListing;
+          }).toList();
+          
+          _isLoading = false;
+        });
+        print('\nState Updated:');
+        print('Total Owned Listings: ${_listings.length}');
+        print('Total Shared Listings: ${_sharedListings.length}');
+        print('Total Videos with Signed URLs: ${signedUrls.length}');
+        
+        // Print sample of final data structure
+        if (_listings.isNotEmpty) {
+          print('\nSample listing structure:');
+          final sampleListing = _listings[0];
+          print('Listing ID: ${sampleListing['id']}');
+          if ((sampleListing['job_applications'] as List).isNotEmpty) {
+            final sampleApp = sampleListing['job_applications'][0];
+            print('Sample application:');
+            print('- Application ID: ${sampleApp['id']}');
+            print('- Profiles data: ${sampleApp['profiles']}');
+            print('- Video URL: ${sampleApp['signed_video_url']}');
+          }
+        }
+      }
+
+    } catch (e, stackTrace) {
+      print('\n=== Error Loading Listings ===');
+      print('Error: $e');
+      print('Stack trace: $stackTrace');
+      
+      // Try to get more details about the error if it's a PostgrestException
+      if (e is PostgrestException) {
+        print('Postgrest Error Details:');
+        print('Code: ${e.code}');
+        print('Message: ${e.message}');
+        print('Details: ${e.details}');
+        print('Hint: ${e.hint}');
+      }
+
       if (mounted) {
         BannerNotification.show(context, 'Error loading listings: $e');
         setState(() => _isLoading = false);
       }
+    } finally {
+      print('\n=== Finished Business Listings Load ===\n');
     }
   }
 
@@ -608,7 +851,7 @@ class _BusinessListingsScreenState extends State<BusinessListingsScreen> {
     final salary = listing['salary'] as num?;
     final isRemote = listing['is_remote'] ?? false;
     final applications = listing['job_applications'] as List;
-    final sharedBy = listing['shared_by_profile'];
+    final sharedBy = listing['business'];
     final sharedAt = DateTime.parse(listing['shared_at']);
     
     String salaryText = salary != null 
